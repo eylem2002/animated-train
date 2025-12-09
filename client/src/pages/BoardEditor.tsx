@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
@@ -14,6 +14,7 @@ import {
   Layers,
   Move3D,
   Grid3X3,
+  Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,20 +41,58 @@ import { useToast } from "@/hooks/use-toast";
 import { VisionRoom } from "@/components/VisionRoom";
 import { ObjectUploader } from "@/components/ObjectUploader";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { useAuth } from "@/hooks/useAuth";
+import { useCollaboration } from "@/hooks/useCollaboration";
+import { PresenceAvatars, CollaboratorCursors, ConnectionStatus } from "@/components/CollaboratorCursors";
 import type { VisionBoard, Asset, AssetMetadata } from "@shared/schema";
 
 export default function BoardEditor() {
   const [, params] = useRoute("/boards/:id");
   const [, navigate] = useLocation();
   const { toast } = useToast();
+  const { user } = useAuth();
   const boardId = params?.id;
   const isNew = boardId === "new";
+  const editorContainerRef = useRef<HTMLDivElement>(null);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [visibility, setVisibility] = useState("private");
   const [selectedAssetId, setSelectedAssetId] = useState<number | null>(null);
   const [showLeftPanel, setShowLeftPanel] = useState(true);
+
+  const numericBoardId = !isNew && boardId ? parseInt(boardId, 10) : 0;
+  
+  const {
+    collaborators,
+    connected,
+    sendCursorPosition,
+    sendAssetUpdate,
+    onMessage,
+  } = useCollaboration({
+    boardId: numericBoardId,
+    userId: user?.id || "",
+    userName: user?.firstName && user?.lastName 
+      ? `${user.firstName} ${user.lastName}` 
+      : user?.email || "Anonymous",
+    userAvatar: user?.profileImageUrl || null,
+    enabled: !isNew && !!user?.id,
+  });
+
+  useEffect(() => {
+    const unsubscribe = onMessage((type, payload) => {
+      if (type === "asset_update" || type === "asset_create" || type === "asset_delete") {
+        queryClient.invalidateQueries({ queryKey: ["/api/boards", boardId, "assets"] });
+      }
+    });
+    return unsubscribe;
+  }, [onMessage, boardId]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!editorContainerRef.current || !connected) return;
+    const rect = editorContainerRef.current.getBoundingClientRect();
+    sendCursorPosition(e.clientX - rect.left, e.clientY - rect.top);
+  }, [connected, sendCursorPosition]);
 
   const { data: board, isLoading: boardLoading } = useQuery<VisionBoard>({
     queryKey: ["/api/boards", boardId],
@@ -147,6 +186,20 @@ export default function BoardEditor() {
         </div>
 
         <div className="flex items-center gap-2">
+          {!isNew && (
+            <div className="flex items-center gap-3 mr-2">
+              {collaborators.length > 0 && (
+                <>
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Users className="h-4 w-4" />
+                    <span>{collaborators.length + 1}</span>
+                  </div>
+                  <PresenceAvatars collaborators={collaborators} />
+                </>
+              )}
+              <ConnectionStatus connected={connected} />
+            </div>
+          )}
           <Button
             variant="ghost"
             size="icon"
@@ -277,11 +330,20 @@ export default function BoardEditor() {
         </AnimatePresence>
 
         {/* 3D Canvas */}
-        <div className="flex-1 relative">
+        <div 
+          ref={editorContainerRef}
+          className="flex-1 relative"
+          onMouseMove={handleMouseMove}
+          data-testid="editor-canvas-container"
+        >
           <VisionRoom
             assets={assets}
             selectedAssetId={selectedAssetId}
             onAssetClick={(asset) => setSelectedAssetId(asset.id)}
+          />
+          <CollaboratorCursors 
+            collaborators={collaborators}
+            containerRef={editorContainerRef}
           />
 
           {/* Floating Controls */}

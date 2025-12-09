@@ -16,6 +16,7 @@ import { z } from "zod";
 import { randomBytes } from "crypto";
 import OpenAI from "openai";
 import { seedGamification } from "./seedGamification";
+import { setupCollaboration } from "./collaboration";
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -29,6 +30,8 @@ export async function registerRoutes(
   await setupAuth(app);
   
   await seedGamification();
+  
+  setupCollaboration(httpServer);
 
   // Auth routes
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
