@@ -6,6 +6,7 @@ import {
   tasks,
   calendarEntries,
   sharedLinks,
+  weeklySummaries,
   type User,
   type UpsertUser,
   type VisionBoard,
@@ -20,6 +21,8 @@ import {
   type InsertCalendarEntry,
   type SharedLink,
   type InsertSharedLink,
+  type WeeklySummary,
+  type InsertWeeklySummary,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sql } from "drizzle-orm";
@@ -68,6 +71,11 @@ export interface IStorage {
   getSharedLink(token: string): Promise<SharedLink | undefined>;
   createSharedLink(link: InsertSharedLink): Promise<SharedLink>;
   deleteSharedLink(id: number): Promise<void>;
+
+  // Weekly Summary operations
+  getWeeklySummaries(userId: string): Promise<WeeklySummary[]>;
+  getWeeklySummary(userId: string, weekStartDate: string): Promise<WeeklySummary | undefined>;
+  createWeeklySummary(summary: InsertWeeklySummary): Promise<WeeklySummary>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -267,6 +275,33 @@ export class DatabaseStorage implements IStorage {
 
   async deleteSharedLink(id: number): Promise<void> {
     await db.delete(sharedLinks).where(eq(sharedLinks.id, id));
+  }
+
+  // Weekly Summary operations
+  async getWeeklySummaries(userId: string): Promise<WeeklySummary[]> {
+    return db
+      .select()
+      .from(weeklySummaries)
+      .where(eq(weeklySummaries.userId, userId))
+      .orderBy(desc(weeklySummaries.weekStartDate));
+  }
+
+  async getWeeklySummary(userId: string, weekStartDate: string): Promise<WeeklySummary | undefined> {
+    const [summary] = await db
+      .select()
+      .from(weeklySummaries)
+      .where(
+        and(
+          eq(weeklySummaries.userId, userId),
+          eq(weeklySummaries.weekStartDate, weekStartDate)
+        )
+      );
+    return summary;
+  }
+
+  async createWeeklySummary(summary: InsertWeeklySummary): Promise<WeeklySummary> {
+    const [newSummary] = await db.insert(weeklySummaries).values(summary).returning();
+    return newSummary;
   }
 }
 

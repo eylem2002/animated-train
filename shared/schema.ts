@@ -117,12 +117,34 @@ export const sharedLinks = pgTable("shared_links", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// Weekly Summaries (AI Coach)
+export const weeklySummaries = pgTable("weekly_summaries", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  weekStartDate: date("week_start_date").notNull(),
+  summary: text("summary").notNull(),
+  highlights: jsonb("highlights"), // achievements, completed goals, etc.
+  recommendations: jsonb("recommendations"), // AI-generated suggestions
+  focusAreas: jsonb("focus_areas"), // areas needing attention
+  metrics: jsonb("metrics"), // completion rates, streaks, etc.
+  motivationalMessage: text("motivational_message"), // encouraging message
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   visionBoards: many(visionBoards),
   goals: many(goals),
   tasks: many(tasks),
   calendarEntries: many(calendarEntries),
+  weeklySummaries: many(weeklySummaries),
+}));
+
+export const weeklySummariesRelations = relations(weeklySummaries, ({ one }) => ({
+  user: one(users, {
+    fields: [weeklySummaries.userId],
+    references: [users.id],
+  }),
 }));
 
 export const visionBoardsRelations = relations(visionBoards, ({ one, many }) => ({
@@ -228,6 +250,11 @@ export const insertSharedLinkSchema = createInsertSchema(sharedLinks).omit({
   createdAt: true,
 });
 
+export const insertWeeklySummarySchema = createInsertSchema(weeklySummaries).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Types
 export type User = typeof users.$inferSelect;
 export type UpsertUser = typeof users.$inferInsert;
@@ -250,6 +277,9 @@ export type InsertCalendarEntry = z.infer<typeof insertCalendarEntrySchema>;
 
 export type SharedLink = typeof sharedLinks.$inferSelect;
 export type InsertSharedLink = z.infer<typeof insertSharedLinkSchema>;
+
+export type WeeklySummary = typeof weeklySummaries.$inferSelect;
+export type InsertWeeklySummary = z.infer<typeof insertWeeklySummarySchema>;
 
 // Asset metadata type for 3D positioning
 export interface AssetMetadata {

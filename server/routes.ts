@@ -438,7 +438,11 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Prompt is required" });
       }
 
-      const openai = new OpenAI();
+      // Use Replit AI Integration credentials
+      const openai = new OpenAI({
+        apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+        baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+      });
 
       const completion = await openai.chat.completions.create({
         model: "gpt-4o",
@@ -479,6 +483,134 @@ Respond with valid JSON array only. No markdown, no explanation.`
     } catch (error) {
       console.error("Error generating AI goals:", error);
       res.status(500).json({ message: "Failed to generate goals" });
+    }
+  });
+
+  // AI Weekly Coach - Generate personalized weekly summary
+  app.post("/api/ai/weekly-summary", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      // Gather user's progress data
+      const [goals, tasks, calendarEntries] = await Promise.all([
+        storage.getGoals(userId),
+        storage.getTasks(userId),
+        storage.getCalendarEntries(userId),
+      ]);
+
+      // Calculate metrics
+      const completedTasks = tasks.filter(t => t.completed).length;
+      const totalTasks = tasks.length;
+      const habits = tasks.filter(t => t.type === "habit");
+      const activeStreaks = habits.filter(h => (h.streakCount || 0) > 0);
+      const maxStreak = Math.max(...habits.map(h => h.streakCount || 0), 0);
+      const achievedGoals = goals.filter(g => g.status === "achieved").length;
+      const inProgressGoals = goals.filter(g => g.status === "in_progress").length;
+
+      // Recent check-ins (last 7 days)
+      const today = new Date();
+      const weekAgo = new Date(today);
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      const recentEntries = calendarEntries.filter(e => {
+        const entryDate = new Date(e.date);
+        return entryDate >= weekAgo && entryDate <= today;
+      });
+      const completedCheckIns = recentEntries.filter(e => e.done).length;
+
+      // Build context for AI
+      const progressContext = {
+        totalGoals: goals.length,
+        achievedGoals,
+        inProgressGoals,
+        totalTasks,
+        completedTasks,
+        totalHabits: habits.length,
+        activeStreaks: activeStreaks.length,
+        maxStreak,
+        weeklyCheckIns: completedCheckIns,
+        goalTitles: goals.map(g => g.title),
+        habitTitles: habits.map(h => h.title),
+      };
+
+      // Use Replit AI Integration credentials
+      const openai = new OpenAI({
+        apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+        baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+      });
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: `You are a supportive and motivating personal coach. Analyze the user's progress data and provide a personalized weekly summary.
+
+Be encouraging but realistic. Celebrate wins, identify areas for improvement, and provide actionable recommendations.
+
+Respond with valid JSON only:
+{
+  "summary": "A 2-3 sentence personalized overview of their week",
+  "highlights": ["Array of 2-3 specific achievements or positive observations"],
+  "focusAreas": ["Array of 1-2 areas that need attention"],
+  "recommendations": ["Array of 2-3 specific, actionable suggestions for next week"],
+  "motivationalMessage": "A brief encouraging message"
+}`
+          },
+          {
+            role: "user",
+            content: `Here is the user's progress data: ${JSON.stringify(progressContext)}`
+          }
+        ],
+        response_format: { type: "json_object" },
+        max_tokens: 1000,
+      });
+
+      const content = completion.choices[0]?.message?.content;
+      if (!content) {
+        return res.status(500).json({ message: "No response from AI" });
+      }
+
+      const parsed = JSON.parse(content);
+
+      // Calculate week start date (Monday)
+      const weekStart = new Date(today);
+      weekStart.setDate(weekStart.getDate() - weekStart.getDay() + 1);
+      const weekStartDate = weekStart.toISOString().split("T")[0];
+
+      // Ensure arrays are properly formatted
+      const highlights = Array.isArray(parsed.highlights) ? parsed.highlights : [];
+      const focusAreas = Array.isArray(parsed.focusAreas) ? parsed.focusAreas : [];
+      const recommendations = Array.isArray(parsed.recommendations) ? parsed.recommendations : [];
+      const motivationalMessage = typeof parsed.motivationalMessage === "string" ? parsed.motivationalMessage : "";
+
+      // Save the summary with motivationalMessage
+      const savedSummary = await storage.createWeeklySummary({
+        userId,
+        weekStartDate,
+        summary: parsed.summary || "",
+        highlights,
+        recommendations,
+        focusAreas,
+        metrics: progressContext,
+        motivationalMessage,
+      });
+
+      res.json(savedSummary);
+    } catch (error) {
+      console.error("Error generating weekly summary:", error);
+      res.status(500).json({ message: "Failed to generate weekly summary" });
+    }
+  });
+
+  // Get all weekly summaries for the user
+  app.get("/api/weekly-summaries", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const summaries = await storage.getWeeklySummaries(userId);
+      res.json(summaries);
+    } catch (error) {
+      console.error("Error fetching weekly summaries:", error);
+      res.status(500).json({ message: "Failed to fetch summaries" });
     }
   });
 

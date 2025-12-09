@@ -9,6 +9,7 @@ import {
   Plus,
   LogOut,
   Settings,
+  BrainCircuit,
 } from "lucide-react";
 import {
   Sidebar,
@@ -105,6 +106,18 @@ export function AppSidebar() {
                   <Link href="/ai-goals">
                     <Sparkles className="h-4 w-4" />
                     <span>AI Goal Builder</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={location === "/coach"}
+                  data-testid="nav-coach"
+                >
+                  <Link href="/coach">
+                    <BrainCircuit className="h-4 w-4" />
+                    <span>Weekly Coach</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
