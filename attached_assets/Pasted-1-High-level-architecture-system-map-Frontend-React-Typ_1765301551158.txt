@@ -1,0 +1,599 @@
+1) High-level architecture (system map)
+
+Frontend: React (TypeScript) + Tailwind (or Tailwind-like) UI, WebGL/three.js for 3D Vision Room, Zustand/Redux for state, WebSocket for realtime features.
+
+Backend API: Node.js (TypeScript) — NestJS or Express with modular structure, GraphQL or REST (I recommend REST for clarity; GraphQL optional for flexible queries).
+
+Database: PostgreSQL (relational for core data) + Redis (caching, sessions, leaderboards) + S3-compatible object storage for images/videos.
+
+Search / Feed: ElasticSearch (or Meilisearch) for fast search of public boards and tags.
+
+AI Services: Hosted LLM (OpenAI / Azure / Anthropic) for Goal Builder, prompts; a small ML service for mood analysis (audio/text sentiment) — can start with LLM sentiment + heuristics.
+
+Realtime: WebSockets (Socket.IO) for presence, collaborative editing, notifications.
+
+Worker Queue: BullMQ (Redis-backed) to process heavy tasks: image video rendering (shareable GIFs), exporting boards, AI batch jobs.
+
+Hosting: Kubernetes (or managed services like Vercel for frontend + AWS/GCP for backend), CI/CD pipelines, Dockerized services.
+
+Monitoring: Sentry, Prometheus + Grafana.
+
+2) Core bounded contexts / services
+
+Auth & Users — sign-up, OAuth, profiles, preferences.
+
+VisionBoards — create/edit boards, assets (images/video/audio/text), privacy (public/private).
+
+Goals & Tasks — goal models, micro-tasks, habits, progress.
+
+Calendar & Habits — sync with goals, recurring tasks, habit check-ins.
+
+AI Assistant — goal generator, planner, weekly analysis.
+
+Social / Feed — public inspiration wall, trending goals, challenge engine.
+
+Gamification — streaks, badges, points, leaderboards.
+
+Sharing/Export — render GIF/video of board, share links, embed.
+
+Notifications — push/email/in-app reminders.
+
+Analytics — user progress tracking, retention, funnels.
+
+3) Tech stack (recommended)
+
+Frontend: React + TypeScript, Vite or Next.js (Next if SSR needed), Tailwind CSS, three.js for 3D, Framer Motion for animation.
+
+State: Zustand (global) or Redux Toolkit.
+
+Backend: Node.js + TypeScript, NestJS (modular, scalable) or Express + TypeDI.
+
+DB: PostgreSQL (with Prisma ORM) or TypeORM.
+
+Cache/Queue: Redis, BullMQ.
+
+Search: Meilisearch (simpler) or ElasticSearch.
+
+Storage: AWS S3 (or DigitalOcean Spaces).
+
+AI: OpenAI GPT-4o or similar via API.
+
+Auth: Auth0, Clerk, or custom JWT + refresh tokens. OAuth for Google/Apple.
+
+CI/CD: GitHub Actions.
+
+Deployment: Docker + Kubernetes (or managed: AWS ECS/Fargate). Frontend on Vercel/Netlify.
+
+4) Data models (SQL-ish) — core tables
+-- users
+users (
+  id uuid PRIMARY KEY,
+  email text UNIQUE,
+  name text,
+  avatar_url text,
+  password_hash text, -- if using own auth
+  created_at timestamptz,
+  last_active timestamptz,
+  preferences jsonb
+);
+
+-- vision_boards
+vision_boards (
+  id uuid PRIMARY KEY,
+  owner_id uuid REFERENCES users(id),
+  title text,
+  description text,
+  visibility text CHECK (visibility in ('private','unlisted','public')),
+  cover_asset_url text,
+  metadata jsonb,
+  created_at timestamptz,
+  updated_at timestamptz
+);
+
+-- assets (images, videos, audio, text blocks)
+assets (
+  id uuid PRIMARY KEY,
+  board_id uuid REFERENCES vision_boards(id),
+  type text CHECK(type in ('image','video','audio','text','embed')),
+  url text,
+  metadata jsonb, -- position, rotation for 3D, tags, alt text
+  created_at timestamptz
+);
+
+-- goals
+goals (
+  id uuid PRIMARY KEY,
+  board_id uuid REFERENCES vision_boards(id),
+  owner_id uuid REFERENCES users(id),
+  title text,
+  description text,
+  category text,
+  target_date date,
+  progress numeric DEFAULT 0, -- 0..100
+  recurring_rule text, -- rrule or cron-style
+  status text CHECK(status in ('planned','in_progress','achieved','stalled')),
+  created_at timestamptz,
+  updated_at timestamptz
+);
+
+-- tasks/habits
+tasks (
+  id uuid PRIMARY KEY,
+  goal_id uuid REFERENCES goals(id),
+  owner_id uuid REFERENCES users(id),
+  type text CHECK(type in ('task','habit')),
+  title text,
+  notes text,
+  frequency jsonb, -- daily/weekly patterns
+  streak_count int DEFAULT 0,
+  last_done timestamptz
+);
+
+-- calendar_entries (explicit check-ins)
+calendar_entries (
+  id uuid PRIMARY KEY,
+  user_id uuid REFERENCES users(id),
+  task_id uuid REFERENCES tasks(id),
+  date date,
+  done boolean,
+  metadata jsonb
+);
+
+-- badges & points
+badges ( id uuid PRIMARY KEY, name text, criteria jsonb );
+user_badges ( id uuid PRIMARY KEY, user_id uuid REFERENCES users(id), badge_id uuid REFERENCES badges(id), awarded_at timestamptz );
+user_points ( user_id uuid PRIMARY KEY, points int );
+
+-- shared_links
+shared_links ( id uuid PRIMARY KEY, board_id uuid REFERENCES vision_boards(id), token text, expires_at timestamptz );
+
+
+Add indexes on owner_id, visibility, tags.
+
+5) API design (REST endpoints examples)
+
+(Use JSON; secure with JWT or OAuth)
+
+Auth
+
+POST /api/auth/signup { name,email,password }
+POST /api/auth/login { email,password } -> { access_token, refresh_token }
+POST /api/auth/oauth callback...
+
+
+Users
+
+GET /api/users/me
+PATCH /api/users/me { name, avatar_url, preferences }
+
+
+Vision Boards
+
+POST /api/boards { title, description, visibility } -> 201 { board }
+GET  /api/boards/:id
+PATCH /api/boards/:id { title, description, visibility }
+DELETE /api/boards/:id
+GET /api/boards?public=true&tag=travel&sort=trending
+
+
+Assets
+
+POST /api/boards/:id/assets -> returns upload URL (S3 presigned)
+PATCH /api/assets/:id (metadata: position, rotation)
+DELETE /api/assets/:id
+
+
+Goals & Tasks
+
+POST /api/boards/:id/goals { title, desc, target_date, tags } -> { goal }
+GET /api/goals/:id
+PATCH /api/goals/:id { progress,status }
+POST /api/goals/:id/tasks { title, frequency } -> { task }
+POST /api/tasks/:id/checkin { date, done } // used by calendar/habit check-ins
+
+
+AI
+
+POST /api/ai/generate-goals { user_id, prompt, context } -> returns array of goals + plan
+POST /api/ai/week-summary { user_id, date_range } -> returns summary + recommendations
+
+
+Social
+
+GET /api/feed/trending
+POST /api/boards/:id/share { visibility: 'public' } -> { share_url }
+
+
+Realtime
+
+WebSocket channels: user:{id}, board:{boardId}, notifications:{userId}
+
+6) UI / UX — page-by-page + components + states
+
+Use Next.js pages or React routes. Keep UI minimal + aesthetic (Notion × Pinterest vibe). Use Tailwind for rapid development.
+
+Global components
+
+TopNav (logo, search, create button, notifications, profile menu)
+
+LeftSidebar (Home, My Boards, Calendar, Challenges, Analytics)
+
+RightPanel (context: selected goal preview, AI assistant)
+
+FloatingActionButton (create goal/board)
+
+3DCanvas wrapper for three.js scene
+
+AssetUploader (drag & drop + upload progress)
+
+ShareModal, ExportModal (render options)
+
+Key pages & UI behaviors
+A) Home / Feed (Public Inspiration Wall)
+
+Masonry grid of public boards as cards
+
+Card shows cover GIF, title, owner, tags, like/share buttons
+
+Filters: trending / new / category / tags
+
+On hover, quick preview + CTA "Open Board" or "Save Template"
+
+B) Board Editor — main experience (desktop-first)
+
+Layout: large central canvas (3D room / 2D canvas), left side toolbar (assets, text, widgets), right side properties panel (selected item properties), top bar (save, publish, share, AI assistant button).
+
+Modes:
+
+3D Vision Room: user navigates a virtual room: walls are panels where assets hang.
+
+Controls: drag-drop into room, scale/rotate/position, depth ordering.
+
+Snap-to-grid / align guides.
+
+Camera presets (front, left, room overview) and small minimap.
+
+2D Collage Mode: for simpler editing (drag/resize).
+
+Timeline Mode: arrange assets for animated export (short GIF/video).
+
+Editing flow:
+
+Create board → choose template (travel, career, health).
+
+Add asset via uploader / stock image search / embed URL.
+
+Drop into canvas: default places it on wall; open properties to add alt text, tags, target goal association.
+
+Link asset → goal: each asset can be tagged to a goal; clicking asset opens Goal quick-edit.
+
+Save periodically (auto-save), version history.
+
+Right-panel: goal quick actions: connect to calendar/habits, set target date, assign micro-tasks.
+
+C) Goal Detail
+
+Header: title, progress ring, target date, achievement probability (AI-estimated)
+
+Tabs: Plan, Habits, Calendar, Journal, Resources
+
+Plan: shows steps with ETA, estimated time, priority values (AI)
+
+Habits: toggle daily tasks, check-in button, streak display
+
+Journal: voice entry (record), text logs
+
+D) Calendar / Habit Tracker
+
+Month/week/day view
+
+Habit check-in quick toggles
+
+Integrations: Google Calendar sync (optional)
+
+Visuals: colored days (green, yellow, red) representing progress
+
+Boost Mode: when falling behind, shows "Sprint Plan" cards
+
+E) AI Assistant Modal
+
+Input box + suggested prompts:
+
+“Make my 3-year career vision into 5 SMART goals”
+
+“Turn this board into a 30-day plan”
+
+Outputs: list of goals with micro-tasks, priority, suggested daily habits
+
+Buttons: Accept to export into board/goals or refine
+
+F) Profile & Analytics
+
+Life Balance Wheel (radar chart)
+
+Progress timeline
+
+Badges / points
+
+Privacy settings & connected accounts
+
+7) UI Visual & Interaction details (visual language)
+
+Color palette: neutral background, bold accent (for progress & CTA), subtle cards with 2xl rounded corners.
+
+Typography: variable fonts (big headings, readable body).
+
+Motion: Framer Motion for micro-interactions: asset drop, goal completion confetti.
+
+Accessibility: keyboard navigation, ARIA labels for canvas controls, color contrast checks.
+
+Mobile: responsive collapse of sidebars, simplified canvas (2D only) with pinch zoom and object selection.
+
+8) 3D Vision Room technical details
+
+Use three.js inside a React wrapper (react-three-fiber).
+
+Scene Graph:
+
+Room (floor, walls) with configurable textures.
+
+Panels as rectangles mapped to wall positions.
+
+AssetMeshes (plane geometries with textures) for images; VideoTexture for videos.
+
+Controls: OrbitControls tuned to limit camera rotation (prevent going through walls).
+
+Serialization: store each asset's transform (position: x,y,z; rotation; scale) in assets.metadata.
+
+Performance: LOD for mobile, dynamic texture resolution, lazy-load assets in view.
+
+9) AI components — how they connect, prompts, and flow
+A) Goal Builder (Core LLM flow)
+
+Input: user prompt + board context + user profile (optional)
+
+Function:
+
+Summarize user prompt → extract intents.
+
+Generate 3–7 SMART goals (Specific, Measurable, Achievable, Relevant, Time-bound).
+
+For each goal produce: description, target_date, milestones, micro-tasks (daily/weekly), suggested habits, estimated difficulty & required time.
+
+Example prompt to LLM:
+
+User profile: {age, occupation, main_interests}
+Vision description: "I want to level up my design skills and build a portfolio to get freelance clients."
+Generate 5 SMART goals, each with 4 milestones, estimated weekly time, recommended daily habits, suggested resources (book/article/video), sample weekly plan for 12 weeks.
+
+B) Weekly Summary & Coach
+
+Aggregates calendar check-ins + goal progress + mood entries → LLM returns a summary and targeted recommendations.
+
+Also suggests a "Sprint Plan" if lagging.
+
+C) Mood / Audio Analysis
+
+For voice journals: extract text (speech-to-text with Whisper-like model) then run sentiment analysis.
+
+Output: mood_score, emotional_tags, suggested micro-actions (breathing, journaling, break).
+
+Use small hosted models or LLM sentiment APIs.
+
+D) Template & Copy Generation
+
+LLM generates catchy titles, share captions (one-click share text + hashtags) for social exports.
+
+Security / Privacy: always ask user consent before sending private board content to AI; anonymize where possible.
+
+10) Gamification & Social mechanics
+
+Points: awarded for check-ins, streaks, finishing goals.
+
+Badges: milestone-based (First 7-day streak, First board shared, 5 goals completed).
+
+Challenges: community challenges (e.g., 21-day fitness), leaderboard.
+
+Accountability pairs: invite friends to follow progress; shared check-ins.
+
+Social feed: users can like/save public boards, follow creators.
+
+11) Sharing / Export pipeline
+
+Export GIF/Video:
+
+Render sequence from three.js scenes (headless or offscreen canvas).
+
+Send frames to worker that uses FFmpeg to compose GIF/MP4.
+
+Store in S3 and provide share link.
+
+Share cards: generate open-graph meta with small rendered preview for social.
+
+Embedding: provide embed iframe for public boards.
+
+12) Notifications & Reminders
+
+Push: Web Push / Mobile push (Firebase).
+
+Email: transactional + weekly summary.
+
+In-app: realtime toasts + notification center.
+
+Smart reminders: contextual (if user hasn't checked in by 10 AM, friendly nudge); adaptive frequency when user is disengaged.
+
+13) Security, privacy, and data governance
+
+Private boards must default to private. Public boards require explicit opt-in.
+
+Encryption: TLS everywhere; encrypt sensitive PII fields at rest if required.
+
+Consent: clear popup before sending content to external AI API.
+
+Rate-limiting & input sanitization.
+
+Audit logs for critical operations.
+
+GDPR/CCPA readiness (export user data / delete on request).
+
+14) Scaling & performance considerations
+
+Use CDN (CloudFront) for static assets.
+
+Cache commonly viewed public boards in Redis.
+
+Offload heavy exports/rendering to background workers and scale workers horizontally.
+
+Pagination/cursor-based endpoints for feed.
+
+Throttle AI calls & cache AI outputs for repeat prompts.
+
+15) Observability & analytics
+
+Track user retention (DAU/MAU), funnel (create board → add asset → create goal → check-in).
+
+Product metrics: average streak length, percent of goals achieved, average check-ins per user.
+
+Events: board_created, goal_created, checkin, share, ai_request.
+
+A/B test onboarding flows and templates.
+
+16) MVP — what to build first (must-have)
+
+Goal: usable product that validates core value: create vision board, set goals, track habits, AI helps plan.
+
+Auth (email) + basic profile
+
+Create simple 2D Vision Board (not full 3D) — drag & drop assets
+
+Goals + micro-tasks model
+
+Calendar + habit check-in (manual)
+
+AI Goal Builder (1 endpoint, LLM)
+
+Public feed (view & share as link)
+
+Notifications (email + in-app)
+
+Export basic shareable image (no video)
+This gives a testable product quickly. After validation, add 3D room, GIF/Video export, advanced AI, and social features.
+
+17) Implementation roadmap (features order — without time estimates)
+
+Core backend + DB models; auth
+
+Basic frontend: board editor (2D), goal CRUD, calendar
+
+AI Goal Builder integration + UI
+
+Habit check-ins + points/badges
+
+Public feed + search
+
+Export image + share links
+
+3D Vision Room (three.js)
+
+Realtime collaboration
+
+Mobile optimizations + push notifications
+
+Advanced analytics & ML mood analysis
+
+18) Example workflows & how modules talk
+Workflow 1 — Create a goal from scratch
+
+User clicks “Add Goal” in Board Editor.
+
+Frontend posts POST /api/goals → backend creates db record.
+
+Optionally call POST /api/ai/generate-goals with goal prompt to flesh out milestones.
+
+LLM returns milestones; backend stores them as tasks.
+
+User chooses to schedule tasks → backend creates calendar_entries.
+
+User completes a task → frontend POST /api/tasks/:id/checkin.
+
+Backend updates streaks, points, push to WebSocket user:{id} to show real-time update.
+
+Workflow 2 — Weekly AI summary
+
+Cron job or user-triggered button calls POST /api/ai/week-summary with user progress data.
+
+Backend composes context (calendar entries, progress, mood logs) and sends to LLM.
+
+LLM returns suggestions; backend saves summary and notifies user.
+
+19) Sample UI wireframe text (for designers)
+
+Board Editor — Top Bar
+Left: Back | Board title (editable) | Template dropdown
+Center: Save (auto) | Publish button | Share
+Right: AI Assistant icon | Export | User avatar
+
+Canvas
+
+Big empty space with grid.
+
+Left vertical toolbar icons: Assets, Text, Goals, Widgets, Templates.
+
+Right side properties panel: shows object properties when selected (title, link to goal, transform controls).
+
+Bottom timeline strip for animated exports.
+
+Goal Card
+
+Small card with circular progress, title, target date, quick actions (check, edit, schedule).
+
+Calendar
+
+Month view: each day shows small progress ring and tasks list (expand on click).
+
+20) Extensibility & future ideas (post-MVP)
+
+Mobile first native apps (React Native / Flutter).
+
+Multi-user boards for teams or families.
+
+Integrations: fitness trackers, budgeting APIs, Google Calendar.
+
+Marketplace: paid templates, coaches, premium AI planning.
+
+White-label for schools/organizations (education packages).
+
+21) Example code snippets (starter hints)
+Minimal Express route to create a goal (TypeScript)
+// controllers/goal.ts
+import { Request, Response } from 'express';
+import db from '../db';
+
+export async function createGoal(req: Request, res: Response) {
+  const { boardId, title, description, targetDate } = req.body;
+  const ownerId = req.user.id;
+  const result = await db.query(
+    `INSERT INTO goals (board_id, owner_id, title, description, target_date) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [boardId, ownerId, title, description, targetDate]
+  );
+  res.status(201).json(result.rows[0]);
+}
+
+Sample AI request payload
+{
+  "user_profile": { "occupation": "student", "interests": ["design","photography"] },
+  "vision_text": "I want to be a freelance designer with steady clients in 12 months",
+  "constraints": { "hours_per_week": 8 }
+}
+
+22) Production checklist (before public launch)
+
+Load test endpoints (500–1k concurrent).
+
+Security audit & pen testing.
+
+Privacy policy & TOS (AI usage disclosures).
+
+Backup & disaster recovery for DB.
+
+Onboarding flows and analytics instrumentation.
