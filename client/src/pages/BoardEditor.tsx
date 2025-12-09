@@ -75,9 +75,10 @@ export default function BoardEditor() {
 
   const createBoardMutation = useMutation({
     mutationFn: async (data: { title: string; description: string; visibility: string }) => {
-      return apiRequest("POST", "/api/boards", data);
+      const response = await apiRequest("POST", "/api/boards", data);
+      return response.json();
     },
-    onSuccess: (data: any) => {
+    onSuccess: (data: { id: number }) => {
       toast({ title: "Board created!" });
       navigate(`/boards/${data.id}`);
       queryClient.invalidateQueries({ queryKey: ["/api/boards"] });
@@ -221,8 +222,9 @@ export default function BoardEditor() {
                   <h3 className="font-semibold">Assets</h3>
                   <ObjectUploader
                     onGetUploadParameters={async () => {
-                      const res = await apiRequest("POST", "/api/objects/upload");
-                      return { method: "PUT" as const, url: res.uploadURL };
+                      const response = await apiRequest("POST", "/api/objects/upload");
+                      const data = await response.json() as { uploadURL: string };
+                      return { method: "PUT" as const, url: data.uploadURL };
                     }}
                     onComplete={(result) => {
                       console.log("Upload complete:", result);

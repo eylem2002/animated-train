@@ -1,4 +1,4 @@
-import { Suspense, useRef, useState } from "react";
+import { Suspense, useRef, useState, useEffect, useCallback, Component, type ReactNode } from "react";
 import { Canvas, useThree, useFrame } from "@react-three/fiber";
 import {
   OrbitControls,
@@ -9,39 +9,142 @@ import {
 } from "@react-three/drei";
 import * as THREE from "three";
 import type { Asset, AssetMetadata } from "@shared/schema";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { 
+  Eye, 
+  RotateCcw, 
+  Maximize2, 
+  Home, 
+  Grid3X3,
+  Play,
+  Pause,
+  SkipBack,
+  ChevronLeft,
+  ChevronRight,
+  ZoomIn,
+  ZoomOut,
+  AlertTriangle,
+  ImageIcon,
+} from "lucide-react";
+import { Slider } from "@/components/ui/slider";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+
+class WebGLErrorBoundary extends Component<
+  { children: ReactNode; fallback: ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: ReactNode; fallback: ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error("WebGL Error:", error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback;
+    }
+    return this.props.children;
+  }
+}
+
+function checkWebGLSupport(): boolean {
+  try {
+    const canvas = document.createElement("canvas");
+    return !!(
+      window.WebGLRenderingContext &&
+      (canvas.getContext("webgl") || canvas.getContext("experimental-webgl"))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function FallbackView2D({ assets }: { assets: Asset[] }) {
+  return (
+    <div className="w-full h-full p-4 overflow-auto" data-testid="fallback-2d-view">
+      <div className="flex items-center gap-2 mb-4 text-muted-foreground">
+        <AlertTriangle className="w-4 h-4" />
+        <span className="text-sm">3D view unavailable - showing 2D gallery</span>
+      </div>
+      {assets.length === 0 ? (
+        <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
+          <ImageIcon className="w-12 h-12 mb-2 opacity-50" />
+          <p>No assets yet. Upload images to get started.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+          {assets.map((asset) => (
+            <Card key={asset.id} className="overflow-hidden">
+              <CardContent className="p-0">
+                <img 
+                  src={asset.url} 
+                  alt={asset.altText || `Asset ${asset.id}`}
+                  className="w-full h-32 object-cover"
+                />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface CameraPreset {
+  name: string;
+  position: [number, number, number];
+  target: [number, number, number];
+  icon: React.ReactNode;
+}
+
+const CAMERA_PRESETS: CameraPreset[] = [
+  { name: "Front", position: [0, 4, 8], target: [0, 3, 0], icon: <Home className="w-3 h-3" /> },
+  { name: "Left", position: [-10, 4, 0], target: [0, 3, 0], icon: <ChevronLeft className="w-3 h-3" /> },
+  { name: "Right", position: [10, 4, 0], target: [0, 3, 0], icon: <ChevronRight className="w-3 h-3" /> },
+  { name: "Top", position: [0, 12, 0.1], target: [0, 3, 0], icon: <Grid3X3 className="w-3 h-3" /> },
+  { name: "Overview", position: [8, 8, 8], target: [0, 3, 0], icon: <Maximize2 className="w-3 h-3" /> },
+];
 
 interface VisionRoomProps {
   assets: Asset[];
   onAssetClick?: (asset: Asset) => void;
   onAssetMove?: (assetId: number, position: { x: number; y: number; z: number }) => void;
   selectedAssetId?: number | null;
+  showControls?: boolean;
 }
 
 function Room() {
   return (
     <group>
-      {/* Floor */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
         <planeGeometry args={[20, 20]} />
         <meshStandardMaterial color="#1a1a2e" roughness={0.9} />
       </mesh>
 
-      {/* Grid on floor */}
       <gridHelper args={[20, 20, "#333355", "#222244"]} position={[0, 0.01, 0]} />
 
-      {/* Back wall */}
       <mesh position={[0, 4, -10]} receiveShadow>
         <planeGeometry args={[20, 8]} />
         <meshStandardMaterial color="#16213e" roughness={0.8} />
       </mesh>
 
-      {/* Left wall */}
       <mesh position={[-10, 4, 0]} rotation={[0, Math.PI / 2, 0]} receiveShadow>
         <planeGeometry args={[20, 8]} />
         <meshStandardMaterial color="#1a1a3e" roughness={0.8} />
       </mesh>
 
-      {/* Right wall */}
       <mesh position={[10, 4, 0]} rotation={[0, -Math.PI / 2, 0]} receiveShadow>
         <planeGeometry args={[20, 8]} />
         <meshStandardMaterial color="#1a1a3e" roughness={0.8} />
@@ -54,27 +157,33 @@ interface AssetPanelProps {
   asset: Asset;
   onClick?: () => void;
   isSelected?: boolean;
+  animationTime?: number;
 }
 
-function AssetPanel({ asset, onClick, isSelected }: AssetPanelProps) {
+function AssetPanel({ asset, onClick, isSelected, animationTime = 0 }: AssetPanelProps) {
   const meshRef = useRef<THREE.Mesh>(null);
   const metadata = (asset.metadata as AssetMetadata) || {};
   const position = metadata.position || { x: 0, y: 3, z: -9.9 };
   const scale = metadata.scale || { x: 2, y: 2, z: 1 };
 
-  // Load texture
   const texture = useTexture(asset.url);
   texture.colorSpace = THREE.SRGBColorSpace;
 
-  // Calculate aspect ratio from texture
-  const aspectRatio = texture.image
-    ? texture.image.width / texture.image.height
+  const aspectRatio = texture.image && (texture.image as HTMLImageElement).width
+    ? (texture.image as HTMLImageElement).width / (texture.image as HTMLImageElement).height
     : 1;
   const adjustedScale = {
     x: scale.x,
     y: scale.x / aspectRatio,
     z: scale.z,
   };
+
+  useFrame(() => {
+    if (meshRef.current && animationTime > 0) {
+      const floatAmount = Math.sin(animationTime * 2 + asset.id * 0.5) * 0.05;
+      meshRef.current.position.y = position.y + floatAmount;
+    }
+  });
 
   return (
     <mesh
@@ -114,30 +223,100 @@ function LoadingFallback() {
   );
 }
 
+interface CameraControllerProps {
+  targetPosition: [number, number, number] | null;
+  targetLookAt: [number, number, number] | null;
+  onTransitionComplete?: () => void;
+}
+
+function CameraController({ targetPosition, targetLookAt, onTransitionComplete }: CameraControllerProps) {
+  const { camera } = useThree();
+  const controlsRef = useRef<any>(null);
+  const transitionProgress = useRef(0);
+  const startPosition = useRef(new THREE.Vector3());
+  const startTarget = useRef(new THREE.Vector3());
+  const isTransitioning = useRef(false);
+
+  useEffect(() => {
+    if (targetPosition && targetLookAt) {
+      startPosition.current.copy(camera.position);
+      if (controlsRef.current) {
+        startTarget.current.copy(controlsRef.current.target);
+      }
+      transitionProgress.current = 0;
+      isTransitioning.current = true;
+    }
+  }, [targetPosition, targetLookAt, camera]);
+
+  useFrame((_, delta) => {
+    if (isTransitioning.current && targetPosition && targetLookAt) {
+      transitionProgress.current = Math.min(transitionProgress.current + delta * 2, 1);
+      const t = transitionProgress.current;
+      const eased = 1 - Math.pow(1 - t, 3);
+
+      camera.position.lerpVectors(
+        startPosition.current,
+        new THREE.Vector3(...targetPosition),
+        eased
+      );
+
+      if (controlsRef.current) {
+        controlsRef.current.target.lerpVectors(
+          startTarget.current,
+          new THREE.Vector3(...targetLookAt),
+          eased
+        );
+        controlsRef.current.update();
+      }
+
+      if (t >= 1) {
+        isTransitioning.current = false;
+        onTransitionComplete?.();
+      }
+    }
+  });
+
+  return (
+    <OrbitControls
+      ref={controlsRef}
+      enablePan={true}
+      enableZoom={true}
+      enableRotate={true}
+      minDistance={3}
+      maxDistance={15}
+      maxPolarAngle={Math.PI / 2 - 0.1}
+      minPolarAngle={0.2}
+      target={[0, 3, 0]}
+    />
+  );
+}
+
 function Scene({
   assets,
   onAssetClick,
   selectedAssetId,
+  cameraTarget,
+  lookAtTarget,
+  onCameraTransitionComplete,
+  animationTime,
 }: {
   assets: Asset[];
   onAssetClick?: (asset: Asset) => void;
   selectedAssetId?: number | null;
+  cameraTarget: [number, number, number] | null;
+  lookAtTarget: [number, number, number] | null;
+  onCameraTransitionComplete?: () => void;
+  animationTime: number;
 }) {
   return (
     <>
       <PerspectiveCamera makeDefault position={[0, 4, 8]} fov={60} />
-      <OrbitControls
-        enablePan={true}
-        enableZoom={true}
-        enableRotate={true}
-        minDistance={3}
-        maxDistance={15}
-        maxPolarAngle={Math.PI / 2 - 0.1}
-        minPolarAngle={0.2}
-        target={[0, 3, 0]}
+      <CameraController 
+        targetPosition={cameraTarget} 
+        targetLookAt={lookAtTarget} 
+        onTransitionComplete={onCameraTransitionComplete}
       />
 
-      {/* Lighting */}
       <ambientLight intensity={0.4} />
       <directionalLight
         position={[5, 10, 5]}
@@ -157,6 +336,7 @@ function Scene({
             asset={asset}
             onClick={() => onAssetClick?.(asset)}
             isSelected={selectedAssetId === asset.id}
+            animationTime={animationTime}
           />
         ))}
       </Suspense>
@@ -166,21 +346,342 @@ function Scene({
   );
 }
 
+function Minimap({ 
+  assets, 
+  onPositionClick 
+}: { 
+  assets: Asset[]; 
+  onPositionClick: (x: number, z: number) => void;
+}) {
+  const mapSize = 80;
+  const roomSize = 20;
+  const scale = mapSize / roomSize;
+
+  return (
+    <div 
+      className="absolute bottom-4 left-4 bg-background/80 backdrop-blur-sm border rounded-lg p-2 z-10"
+      data-testid="minimap"
+    >
+      <div 
+        className="relative bg-muted rounded cursor-crosshair"
+        style={{ width: mapSize, height: mapSize }}
+        onClick={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const x = ((e.clientX - rect.left) / mapSize - 0.5) * roomSize;
+          const z = ((e.clientY - rect.top) / mapSize - 0.5) * roomSize;
+          onPositionClick(x, z);
+        }}
+      >
+        <div 
+          className="absolute border border-muted-foreground/30" 
+          style={{ 
+            left: '10%', 
+            top: '10%', 
+            width: '80%', 
+            height: '80%',
+            borderRadius: 2
+          }} 
+        />
+        
+        {assets.map((asset) => {
+          const metadata = (asset.metadata as AssetMetadata) || {};
+          const pos = metadata.position || { x: 0, y: 3, z: -5 };
+          const left = (pos.x / roomSize + 0.5) * mapSize;
+          const top = (pos.z / roomSize + 0.5) * mapSize;
+          
+          return (
+            <div
+              key={asset.id}
+              className="absolute w-2 h-2 bg-primary rounded-full transform -translate-x-1 -translate-y-1"
+              style={{ left, top }}
+              title={asset.altText || `Asset ${asset.id}`}
+            />
+          );
+        })}
+        
+        <div 
+          className="absolute w-0 h-0 transform -translate-x-1 -translate-y-1"
+          style={{ 
+            left: mapSize / 2, 
+            top: mapSize * 0.7,
+            borderLeft: '4px solid transparent',
+            borderRight: '4px solid transparent',
+            borderBottom: '8px solid hsl(var(--primary))'
+          }}
+        />
+      </div>
+      <p className="text-xs text-muted-foreground text-center mt-1">Minimap</p>
+    </div>
+  );
+}
+
+function TimelineControls({
+  isPlaying,
+  onPlayPause,
+  onReset,
+  progress,
+  onProgressChange,
+}: {
+  isPlaying: boolean;
+  onPlayPause: () => void;
+  onReset: () => void;
+  progress: number;
+  onProgressChange: (value: number) => void;
+}) {
+  return (
+    <div 
+      className="absolute bottom-4 right-4 bg-background/80 backdrop-blur-sm border rounded-lg p-3 z-10 flex items-center gap-3"
+      data-testid="timeline-controls"
+    >
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button 
+            size="icon" 
+            variant="ghost"
+            onClick={onReset}
+            data-testid="button-timeline-reset"
+          >
+            <SkipBack className="w-4 h-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Reset Animation</TooltipContent>
+      </Tooltip>
+      
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button 
+            size="icon" 
+            variant="ghost"
+            onClick={onPlayPause}
+            data-testid="button-timeline-play"
+          >
+            {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{isPlaying ? "Pause" : "Play"} Animation</TooltipContent>
+      </Tooltip>
+
+      <div className="w-32">
+        <Slider
+          value={[progress * 100]}
+          onValueChange={([value]) => onProgressChange(value / 100)}
+          max={100}
+          step={1}
+          className="cursor-pointer"
+          data-testid="slider-timeline"
+        />
+      </div>
+      
+      <span className="text-xs text-muted-foreground w-10">
+        {Math.round(progress * 100)}%
+      </span>
+    </div>
+  );
+}
+
+function CameraPresetButtons({
+  onPresetSelect,
+  activePreset,
+}: {
+  onPresetSelect: (preset: CameraPreset) => void;
+  activePreset: string | null;
+}) {
+  return (
+    <div 
+      className="absolute top-4 left-4 bg-background/80 backdrop-blur-sm border rounded-lg p-2 z-10 flex flex-col gap-1"
+      data-testid="camera-presets"
+    >
+      <p className="text-xs text-muted-foreground mb-1 px-1">Camera Views</p>
+      {CAMERA_PRESETS.map((preset) => (
+        <Tooltip key={preset.name}>
+          <TooltipTrigger asChild>
+            <Button
+              size="sm"
+              variant={activePreset === preset.name ? "secondary" : "ghost"}
+              onClick={() => onPresetSelect(preset)}
+              className="justify-start gap-2"
+              data-testid={`button-preset-${preset.name.toLowerCase()}`}
+            >
+              {preset.icon}
+              <span className="text-xs">{preset.name}</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="right">{preset.name} View</TooltipContent>
+        </Tooltip>
+      ))}
+    </div>
+  );
+}
+
+function ZoomControls({ onZoom }: { onZoom: (direction: 'in' | 'out') => void }) {
+  return (
+    <div 
+      className="absolute top-4 right-4 bg-background/80 backdrop-blur-sm border rounded-lg p-1 z-10 flex flex-col gap-1"
+      data-testid="zoom-controls"
+    >
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button 
+            size="icon" 
+            variant="ghost"
+            onClick={() => onZoom('in')}
+            data-testid="button-zoom-in"
+          >
+            <ZoomIn className="w-4 h-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Zoom In</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button 
+            size="icon" 
+            variant="ghost"
+            onClick={() => onZoom('out')}
+            data-testid="button-zoom-out"
+          >
+            <ZoomOut className="w-4 h-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Zoom Out</TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
 export function VisionRoom({
   assets,
   onAssetClick,
   onAssetMove,
   selectedAssetId,
+  showControls = true,
 }: VisionRoomProps) {
+  const [cameraTarget, setCameraTarget] = useState<[number, number, number] | null>(null);
+  const [lookAtTarget, setLookAtTarget] = useState<[number, number, number] | null>(null);
+  const [activePreset, setActivePreset] = useState<string | null>("Front");
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [animationTime, setAnimationTime] = useState(0);
+  const [animationProgress, setAnimationProgress] = useState(0);
+  const animationRef = useRef<number | null>(null);
+  const [webglSupported] = useState(() => checkWebGLSupport());
+
+  const handlePresetSelect = useCallback((preset: CameraPreset) => {
+    setCameraTarget(preset.position);
+    setLookAtTarget(preset.target);
+    setActivePreset(preset.name);
+  }, []);
+
+  const handleMinimapClick = useCallback((x: number, z: number) => {
+    const newPosition: [number, number, number] = [x, 6, z + 8];
+    const newTarget: [number, number, number] = [x, 3, z];
+    setCameraTarget(newPosition);
+    setLookAtTarget(newTarget);
+    setActivePreset(null);
+  }, []);
+
+  const handleZoom = useCallback((direction: 'in' | 'out') => {
+    const zoomPreset = direction === 'in' 
+      ? { position: [0, 3, 5] as [number, number, number], target: [0, 3, 0] as [number, number, number] }
+      : { position: [0, 6, 12] as [number, number, number], target: [0, 3, 0] as [number, number, number] };
+    setCameraTarget(zoomPreset.position);
+    setLookAtTarget(zoomPreset.target);
+    setActivePreset(null);
+  }, []);
+
+  useEffect(() => {
+    let lastTime = performance.now();
+    
+    const animate = (currentTime: number) => {
+      if (isPlaying) {
+        const delta = (currentTime - lastTime) / 1000;
+        lastTime = currentTime;
+        
+        setAnimationTime(prev => prev + delta);
+        setAnimationProgress(prev => {
+          const newProgress = prev + delta * 0.05;
+          return newProgress > 1 ? 0 : newProgress;
+        });
+        
+        animationRef.current = requestAnimationFrame(animate);
+      }
+    };
+
+    if (isPlaying) {
+      lastTime = performance.now();
+      animationRef.current = requestAnimationFrame(animate);
+    }
+
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+    };
+  }, [isPlaying]);
+
+  const handlePlayPause = useCallback(() => {
+    setIsPlaying(prev => !prev);
+  }, []);
+
+  const handleReset = useCallback(() => {
+    setIsPlaying(false);
+    setAnimationTime(0);
+    setAnimationProgress(0);
+  }, []);
+
+  const handleProgressChange = useCallback((value: number) => {
+    setAnimationProgress(value);
+    setAnimationTime(value * 20);
+  }, []);
+
+  const fallback = <FallbackView2D assets={assets} />;
+
+  if (!webglSupported) {
+    return (
+      <div className="relative w-full h-full bg-gradient-to-b from-[#0f0f1a] to-[#1a1a2e] rounded-lg overflow-hidden">
+        {fallback}
+      </div>
+    );
+  }
+
   return (
-    <div className="w-full h-full bg-gradient-to-b from-[#0f0f1a] to-[#1a1a2e] rounded-lg overflow-hidden">
-      <Canvas shadows dpr={[1, 2]}>
-        <Scene
-          assets={assets}
-          onAssetClick={onAssetClick}
-          selectedAssetId={selectedAssetId}
-        />
-      </Canvas>
+    <div className="relative w-full h-full bg-gradient-to-b from-[#0f0f1a] to-[#1a1a2e] rounded-lg overflow-hidden">
+      <WebGLErrorBoundary fallback={fallback}>
+        <Canvas shadows dpr={[1, 2]}>
+          <Scene
+            assets={assets}
+            onAssetClick={onAssetClick}
+            selectedAssetId={selectedAssetId}
+            cameraTarget={cameraTarget}
+            lookAtTarget={lookAtTarget}
+            onCameraTransitionComplete={() => {
+              setCameraTarget(null);
+              setLookAtTarget(null);
+            }}
+            animationTime={animationTime}
+          />
+        </Canvas>
+      </WebGLErrorBoundary>
+
+      {showControls && (
+        <>
+          <CameraPresetButtons 
+            onPresetSelect={handlePresetSelect} 
+            activePreset={activePreset}
+          />
+          <ZoomControls onZoom={handleZoom} />
+          <Minimap 
+            assets={assets} 
+            onPositionClick={handleMinimapClick}
+          />
+          <TimelineControls
+            isPlaying={isPlaying}
+            onPlayPause={handlePlayPause}
+            onReset={handleReset}
+            progress={animationProgress}
+            onProgressChange={handleProgressChange}
+          />
+        </>
+      )}
     </div>
   );
 }
