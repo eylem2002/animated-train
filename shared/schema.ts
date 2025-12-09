@@ -131,13 +131,110 @@ export const weeklySummaries = pgTable("weekly_summaries", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// Gamification: User XP and Level
+export const userXp = pgTable("user_xp", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }).unique(),
+  totalXp: integer("total_xp").notNull().default(0),
+  level: integer("level").notNull().default(1),
+  currentLevelXp: integer("current_level_xp").notNull().default(0),
+  xpToNextLevel: integer("xp_to_next_level").notNull().default(100),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Gamification: Badge Definitions
+export const badges = pgTable("badges", {
+  id: serial("id").primaryKey(),
+  slug: varchar("slug", { length: 50 }).notNull().unique(),
+  name: varchar("name", { length: 100 }).notNull(),
+  description: text("description").notNull(),
+  icon: varchar("icon", { length: 50 }).notNull(), // lucide icon name
+  color: varchar("color", { length: 20 }).notNull().default("primary"),
+  xpReward: integer("xp_reward").notNull().default(0),
+  rarity: varchar("rarity", { length: 20 }).notNull().default("common"), // common, rare, epic, legendary
+  category: varchar("category", { length: 50 }).notNull().default("general"),
+});
+
+// Gamification: User Earned Badges
+export const userBadges = pgTable("user_badges", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  badgeId: integer("badge_id").notNull().references(() => badges.id, { onDelete: "cascade" }),
+  earnedAt: timestamp("earned_at").defaultNow(),
+}, (table) => [
+  index("IDX_user_badges_unique").on(table.userId, table.badgeId),
+]);
+
+// Gamification: Achievement Definitions
+export const achievements = pgTable("achievements", {
+  id: serial("id").primaryKey(),
+  slug: varchar("slug", { length: 50 }).notNull().unique(),
+  name: varchar("name", { length: 100 }).notNull(),
+  description: text("description").notNull(),
+  icon: varchar("icon", { length: 50 }).notNull(),
+  xpReward: integer("xp_reward").notNull().default(0),
+  requirement: jsonb("requirement").notNull(), // { type: "streak", count: 7 } or { type: "tasks_completed", count: 10 }
+  tier: integer("tier").notNull().default(1), // achievement tier/level
+});
+
+// Gamification: User Unlocked Achievements
+export const userAchievements = pgTable("user_achievements", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  achievementId: integer("achievement_id").notNull().references(() => achievements.id, { onDelete: "cascade" }),
+  unlockedAt: timestamp("unlocked_at").defaultNow(),
+  progress: integer("progress").notNull().default(0), // for tracking progress toward achievement
+}, (table) => [
+  index("IDX_user_achievements_unique").on(table.userId, table.achievementId),
+]);
+
 // Relations
-export const usersRelations = relations(users, ({ many }) => ({
+export const usersRelations = relations(users, ({ many, one }) => ({
   visionBoards: many(visionBoards),
   goals: many(goals),
   tasks: many(tasks),
   calendarEntries: many(calendarEntries),
   weeklySummaries: many(weeklySummaries),
+  xp: one(userXp),
+  badges: many(userBadges),
+  achievements: many(userAchievements),
+}));
+
+export const userXpRelations = relations(userXp, ({ one }) => ({
+  user: one(users, {
+    fields: [userXp.userId],
+    references: [users.id],
+  }),
+}));
+
+export const badgesRelations = relations(badges, ({ many }) => ({
+  userBadges: many(userBadges),
+}));
+
+export const userBadgesRelations = relations(userBadges, ({ one }) => ({
+  user: one(users, {
+    fields: [userBadges.userId],
+    references: [users.id],
+  }),
+  badge: one(badges, {
+    fields: [userBadges.badgeId],
+    references: [badges.id],
+  }),
+}));
+
+export const achievementsRelations = relations(achievements, ({ many }) => ({
+  userAchievements: many(userAchievements),
+}));
+
+export const userAchievementsRelations = relations(userAchievements, ({ one }) => ({
+  user: one(users, {
+    fields: [userAchievements.userId],
+    references: [users.id],
+  }),
+  achievement: one(achievements, {
+    fields: [userAchievements.achievementId],
+    references: [achievements.id],
+  }),
 }));
 
 export const weeklySummariesRelations = relations(weeklySummaries, ({ one }) => ({
@@ -255,6 +352,29 @@ export const insertWeeklySummarySchema = createInsertSchema(weeklySummaries).omi
   createdAt: true,
 });
 
+export const insertUserXpSchema = createInsertSchema(userXp).omit({
+  id: true,
+  updatedAt: true,
+});
+
+export const insertBadgeSchema = createInsertSchema(badges).omit({
+  id: true,
+});
+
+export const insertUserBadgeSchema = createInsertSchema(userBadges).omit({
+  id: true,
+  earnedAt: true,
+});
+
+export const insertAchievementSchema = createInsertSchema(achievements).omit({
+  id: true,
+});
+
+export const insertUserAchievementSchema = createInsertSchema(userAchievements).omit({
+  id: true,
+  unlockedAt: true,
+});
+
 // Types
 export type User = typeof users.$inferSelect;
 export type UpsertUser = typeof users.$inferInsert;
@@ -280,6 +400,27 @@ export type InsertSharedLink = z.infer<typeof insertSharedLinkSchema>;
 
 export type WeeklySummary = typeof weeklySummaries.$inferSelect;
 export type InsertWeeklySummary = z.infer<typeof insertWeeklySummarySchema>;
+
+export type UserXp = typeof userXp.$inferSelect;
+export type InsertUserXp = z.infer<typeof insertUserXpSchema>;
+
+export type Badge = typeof badges.$inferSelect;
+export type InsertBadge = z.infer<typeof insertBadgeSchema>;
+
+export type UserBadge = typeof userBadges.$inferSelect;
+export type InsertUserBadge = z.infer<typeof insertUserBadgeSchema>;
+
+export type Achievement = typeof achievements.$inferSelect;
+export type InsertAchievement = z.infer<typeof insertAchievementSchema>;
+
+export type UserAchievement = typeof userAchievements.$inferSelect;
+export type InsertUserAchievement = z.infer<typeof insertUserAchievementSchema>;
+
+// Achievement requirement type
+export interface AchievementRequirement {
+  type: "streak" | "tasks_completed" | "goals_completed" | "boards_created" | "login_days" | "xp_earned";
+  count: number;
+}
 
 // Asset metadata type for 3D positioning
 export interface AssetMetadata {

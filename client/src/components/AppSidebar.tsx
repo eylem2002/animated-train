@@ -32,7 +32,7 @@ const mainNavItems = [
   { title: "My Boards", url: "/boards", icon: Layout },
   { title: "Goals", url: "/goals", icon: Target },
   { title: "Calendar", url: "/calendar", icon: Calendar },
-  { title: "Challenges", url: "/challenges", icon: Trophy },
+  { title: "Achievements", url: "/achievements", icon: Trophy },
 ];
 
 export function AppSidebar() {

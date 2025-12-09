@@ -16,6 +16,7 @@ import BoardEditor from "@/pages/BoardEditor";
 import Goals from "@/pages/Goals";
 import Calendar from "@/pages/Calendar";
 import Coach from "@/pages/Coach";
+import Gamification from "@/pages/Gamification";
 
 function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
   const style = {
@@ -50,7 +51,7 @@ function AuthenticatedRouter() {
         <Route path="/goals/:id" component={Goals} />
         <Route path="/calendar" component={Calendar} />
         <Route path="/coach" component={Coach} />
-        <Route path="/challenges" component={Home} />
+        <Route path="/achievements" component={Gamification} />
         <Route path="/ai-goals" component={Goals} />
         <Route component={NotFound} />
       </Switch>

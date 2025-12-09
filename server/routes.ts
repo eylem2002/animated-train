@@ -14,12 +14,15 @@ import {
 import { z } from "zod";
 import { randomBytes } from "crypto";
 import OpenAI from "openai";
+import { seedGamification } from "./seedGamification";
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
   await setupAuth(app);
+  
+  await seedGamification();
 
   // Auth routes
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
@@ -613,6 +616,145 @@ Respond with valid JSON only:
       res.status(500).json({ message: "Failed to fetch summaries" });
     }
   });
+
+  // ==================== GAMIFICATION ROUTES ====================
+
+  // Get user's XP and level
+  app.get("/api/gamification/xp", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      let xp = await storage.getUserXp(userId);
+      if (!xp) {
+        xp = await storage.upsertUserXp({
+          userId,
+          totalXp: 0,
+          level: 1,
+          currentLevelXp: 0,
+          xpToNextLevel: 100,
+        });
+      }
+      res.json(xp);
+    } catch (error) {
+      console.error("Error fetching user XP:", error);
+      res.status(500).json({ message: "Failed to fetch XP" });
+    }
+  });
+
+  // Add XP to user
+  app.post("/api/gamification/xp/add", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { amount, reason } = req.body;
+      if (!amount || typeof amount !== "number" || amount <= 0) {
+        return res.status(400).json({ message: "Valid positive amount is required" });
+      }
+      const xp = await storage.addXp(userId, amount);
+      res.json({ ...xp, xpAdded: amount, reason });
+    } catch (error) {
+      console.error("Error adding XP:", error);
+      res.status(500).json({ message: "Failed to add XP" });
+    }
+  });
+
+  // Get leaderboard (authenticated to protect user data)
+  app.get("/api/gamification/leaderboard", isAuthenticated, async (req: any, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 10;
+      const leaderboard = await storage.getLeaderboard(Math.min(limit, 50));
+      res.json(leaderboard);
+    } catch (error) {
+      console.error("Error fetching leaderboard:", error);
+      res.status(500).json({ message: "Failed to fetch leaderboard" });
+    }
+  });
+
+  // Get all badges (authenticated)
+  app.get("/api/gamification/badges", isAuthenticated, async (req: any, res) => {
+    try {
+      const allBadges = await storage.getBadges();
+      res.json(allBadges);
+    } catch (error) {
+      console.error("Error fetching badges:", error);
+      res.status(500).json({ message: "Failed to fetch badges" });
+    }
+  });
+
+  // Get user's earned badges
+  app.get("/api/gamification/badges/user", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const badges = await storage.getUserBadges(userId);
+      res.json(badges);
+    } catch (error) {
+      console.error("Error fetching user badges:", error);
+      res.status(500).json({ message: "Failed to fetch user badges" });
+    }
+  });
+
+  // Get all achievements (authenticated)
+  app.get("/api/gamification/achievements", isAuthenticated, async (req: any, res) => {
+    try {
+      const allAchievements = await storage.getAchievements();
+      res.json(allAchievements);
+    } catch (error) {
+      console.error("Error fetching achievements:", error);
+      res.status(500).json({ message: "Failed to fetch achievements" });
+    }
+  });
+
+  // Get user's achievements with progress
+  app.get("/api/gamification/achievements/user", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const achievements = await storage.getUserAchievements(userId);
+      res.json(achievements);
+    } catch (error) {
+      console.error("Error fetching user achievements:", error);
+      res.status(500).json({ message: "Failed to fetch user achievements" });
+    }
+  });
+
+  // Get complete gamification profile
+  app.get("/api/gamification/profile", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      let xp = await storage.getUserXp(userId);
+      if (!xp) {
+        xp = await storage.upsertUserXp({
+          userId,
+          totalXp: 0,
+          level: 1,
+          currentLevelXp: 0,
+          xpToNextLevel: 100,
+        });
+      }
+      
+      const badges = await storage.getUserBadges(userId);
+      const achievements = await storage.getUserAchievements(userId);
+      const allBadges = await storage.getBadges();
+      const allAchievements = await storage.getAchievements();
+      
+      res.json({
+        xp,
+        badges,
+        achievements,
+        allBadges,
+        allAchievements,
+        stats: {
+          totalBadges: allBadges.length,
+          earnedBadges: badges.length,
+          totalAchievements: allAchievements.length,
+          unlockedAchievements: achievements.filter(a => a.progress === 100).length,
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching gamification profile:", error);
+      res.status(500).json({ message: "Failed to fetch gamification profile" });
+    }
+  });
+
+  // ==================== END GAMIFICATION ROUTES ====================
 
   // Object storage routes
   app.get("/public-objects/:filePath(*)", async (req, res) => {
