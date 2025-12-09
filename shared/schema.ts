@@ -188,6 +188,25 @@ export const userAchievements = pgTable("user_achievements", {
   index("IDX_user_achievements_unique").on(table.userId, table.achievementId),
 ]);
 
+// Voice Journal Entries
+export const journalEntries = pgTable("journal_entries", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  title: text("title"),
+  transcript: text("transcript"), // Speech-to-text result
+  audioUrl: text("audio_url"), // Stored audio file
+  duration: integer("duration"), // Duration in seconds
+  mood: varchar("mood", { length: 20 }), // detected mood: happy, sad, neutral, excited, anxious, etc.
+  sentiment: numeric("sentiment", { precision: 4, scale: 3 }), // -1 to 1 sentiment score
+  tags: text("tags").array(),
+  goalId: integer("goal_id").references(() => goals.id, { onDelete: "set null" }),
+  isPrivate: boolean("is_private").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("IDX_journal_entries_user").on(table.userId),
+  index("IDX_journal_entries_created").on(table.createdAt),
+]);
+
 // Relations
 export const usersRelations = relations(users, ({ many, one }) => ({
   visionBoards: many(visionBoards),
@@ -198,6 +217,18 @@ export const usersRelations = relations(users, ({ many, one }) => ({
   xp: one(userXp),
   badges: many(userBadges),
   achievements: many(userAchievements),
+  journalEntries: many(journalEntries),
+}));
+
+export const journalEntriesRelations = relations(journalEntries, ({ one }) => ({
+  user: one(users, {
+    fields: [journalEntries.userId],
+    references: [users.id],
+  }),
+  goal: one(goals, {
+    fields: [journalEntries.goalId],
+    references: [goals.id],
+  }),
 }));
 
 export const userXpRelations = relations(userXp, ({ one }) => ({
@@ -375,6 +406,11 @@ export const insertUserAchievementSchema = createInsertSchema(userAchievements).
   unlockedAt: true,
 });
 
+export const insertJournalEntrySchema = createInsertSchema(journalEntries).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Types
 export type User = typeof users.$inferSelect;
 export type UpsertUser = typeof users.$inferInsert;
@@ -415,6 +451,9 @@ export type InsertAchievement = z.infer<typeof insertAchievementSchema>;
 
 export type UserAchievement = typeof userAchievements.$inferSelect;
 export type InsertUserAchievement = z.infer<typeof insertUserAchievementSchema>;
+
+export type JournalEntry = typeof journalEntries.$inferSelect;
+export type InsertJournalEntry = z.infer<typeof insertJournalEntrySchema>;
 
 // Achievement requirement type
 export interface AchievementRequirement {

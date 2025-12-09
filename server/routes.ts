@@ -10,11 +10,17 @@ import {
   insertGoalSchema,
   insertTaskSchema,
   insertCalendarEntrySchema,
+  insertJournalEntrySchema,
 } from "@shared/schema";
 import { z } from "zod";
 import { randomBytes } from "crypto";
 import OpenAI from "openai";
 import { seedGamification } from "./seedGamification";
+
+const openai = new OpenAI({
+  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+});
 
 export async function registerRoutes(
   httpServer: Server,
@@ -849,6 +855,233 @@ Respond with valid JSON only:
       res.status(500).json({ error: "Internal server error" });
     }
   });
+
+  // ==================== JOURNAL ROUTES ====================
+  
+  // Get user's journal entries
+  app.get("/api/journal", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const limit = parseInt(req.query.limit as string) || 50;
+      const entries = await storage.getJournalEntries(userId, limit);
+      res.json(entries);
+    } catch (error) {
+      console.error("Error fetching journal entries:", error);
+      res.status(500).json({ message: "Failed to fetch journal entries" });
+    }
+  });
+
+  // Get single journal entry
+  app.get("/api/journal/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const entry = await storage.getJournalEntry(id);
+      if (!entry) {
+        return res.status(404).json({ message: "Entry not found" });
+      }
+      const userId = req.user.claims.sub;
+      if (entry.userId !== userId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      res.json(entry);
+    } catch (error) {
+      console.error("Error fetching journal entry:", error);
+      res.status(500).json({ message: "Failed to fetch journal entry" });
+    }
+  });
+
+  // Create journal entry (with optional sentiment analysis)
+  app.post("/api/journal", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { title, transcript, audioUrl, duration, goalId, tags } = req.body;
+
+      // Validate that at least transcript is provided
+      if (!transcript || typeof transcript !== "string" || transcript.trim().length === 0) {
+        return res.status(400).json({ message: "Transcript is required" });
+      }
+
+      // Validate tags if provided
+      const validatedTags = Array.isArray(tags) ? tags.filter((t: unknown) => typeof t === "string") : null;
+
+      // Analyze sentiment if transcript is provided
+      let mood: string | undefined;
+      let sentiment: string | undefined;
+
+      if (transcript && transcript.trim().length > 10) {
+        try {
+          const analysisResponse = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+              {
+                role: "system",
+                content: `You are a sentiment analyzer. Analyze the emotional tone of the journal entry and respond with JSON:
+{
+  "mood": "<one of: happy, excited, grateful, calm, neutral, anxious, sad, frustrated, reflective>",
+  "sentiment": "<number between -1.0 and 1.0 representing negative to positive>"
+}
+Be accurate and empathetic in your analysis. Only return the JSON, nothing else.`
+              },
+              {
+                role: "user",
+                content: transcript
+              }
+            ],
+            temperature: 0.3,
+            max_tokens: 100,
+          });
+          
+          const analysisText = analysisResponse.choices[0]?.message?.content || "";
+          try {
+            const analysis = JSON.parse(analysisText.trim());
+            mood = analysis.mood;
+            sentiment = analysis.sentiment?.toString();
+          } catch (parseErr) {
+            console.error("Failed to parse sentiment analysis:", parseErr);
+          }
+        } catch (aiError) {
+          console.error("Sentiment analysis failed:", aiError);
+          // Continue without sentiment data
+        }
+      }
+
+      const entry = await storage.createJournalEntry({
+        userId,
+        title: title || null,
+        transcript: transcript.trim(),
+        audioUrl: audioUrl || null,
+        duration: typeof duration === "number" ? duration : null,
+        mood: mood || null,
+        sentiment: sentiment || null,
+        tags: validatedTags,
+        goalId: typeof goalId === "number" ? goalId : null,
+        isPrivate: true,
+      });
+
+      res.status(201).json(entry);
+    } catch (error) {
+      console.error("Error creating journal entry:", error);
+      res.status(500).json({ message: "Failed to create journal entry" });
+    }
+  });
+
+  // Transcribe audio (speech-to-text using OpenAI Whisper)
+  app.post("/api/journal/transcribe", isAuthenticated, async (req: any, res) => {
+    try {
+      const { audioUrl } = req.body;
+      
+      if (!audioUrl) {
+        return res.status(400).json({ message: "Audio URL is required" });
+      }
+
+      // For now, return a placeholder - real implementation would fetch audio and send to Whisper
+      // The frontend will use browser's Web Speech API for real-time transcription
+      res.json({ 
+        transcript: "", 
+        message: "Use browser's Web Speech API for real-time transcription" 
+      });
+    } catch (error) {
+      console.error("Error transcribing audio:", error);
+      res.status(500).json({ message: "Failed to transcribe audio" });
+    }
+  });
+
+  // Update journal entry
+  app.patch("/api/journal/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const entry = await storage.getJournalEntry(id);
+      if (!entry) {
+        return res.status(404).json({ message: "Entry not found" });
+      }
+      const userId = req.user.claims.sub;
+      if (entry.userId !== userId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      
+      const { title, transcript, tags, goalId, isPrivate } = req.body;
+      const updated = await storage.updateJournalEntry(id, {
+        title: title !== undefined ? title : entry.title,
+        transcript: transcript !== undefined ? transcript : entry.transcript,
+        tags: tags !== undefined ? tags : entry.tags,
+        goalId: goalId !== undefined ? goalId : entry.goalId,
+        isPrivate: isPrivate !== undefined ? isPrivate : entry.isPrivate,
+      });
+      
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating journal entry:", error);
+      res.status(500).json({ message: "Failed to update journal entry" });
+    }
+  });
+
+  // Delete journal entry
+  app.delete("/api/journal/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const entry = await storage.getJournalEntry(id);
+      if (!entry) {
+        return res.status(404).json({ message: "Entry not found" });
+      }
+      const userId = req.user.claims.sub;
+      if (entry.userId !== userId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      
+      await storage.deleteJournalEntry(id);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting journal entry:", error);
+      res.status(500).json({ message: "Failed to delete journal entry" });
+    }
+  });
+
+  // Analyze text sentiment only (for text-only entries)
+  app.post("/api/journal/analyze", isAuthenticated, async (req: any, res) => {
+    try {
+      const { text } = req.body;
+      
+      if (!text || text.trim().length < 10) {
+        return res.status(400).json({ message: "Text must be at least 10 characters" });
+      }
+
+      const analysisResponse = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: `You are a sentiment analyzer. Analyze the emotional tone and respond with JSON:
+{
+  "mood": "<one of: happy, excited, grateful, calm, neutral, anxious, sad, frustrated, reflective>",
+  "sentiment": <number between -1.0 and 1.0>,
+  "insights": "<brief 1-2 sentence observation about the emotional state>"
+}
+Only return the JSON, nothing else.`
+          },
+          {
+            role: "user",
+            content: text
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 200,
+      });
+
+      const analysisText = analysisResponse.choices[0]?.message?.content || "";
+      try {
+        const analysis = JSON.parse(analysisText.trim());
+        res.json(analysis);
+      } catch (parseErr) {
+        console.error("Failed to parse sentiment analysis:", parseErr);
+        res.status(500).json({ message: "Failed to parse analysis" });
+      }
+    } catch (error) {
+      console.error("Error analyzing text:", error);
+      res.status(500).json({ message: "Failed to analyze text" });
+    }
+  });
+
+  // ==================== END JOURNAL ROUTES ====================
 
   // Share link routes
   app.post("/api/boards/:id/share", isAuthenticated, async (req: any, res) => {

@@ -12,6 +12,7 @@ import {
   userBadges,
   achievements,
   userAchievements,
+  journalEntries,
   type User,
   type UpsertUser,
   type VisionBoard,
@@ -38,6 +39,8 @@ import {
   type InsertAchievement,
   type UserAchievement,
   type InsertUserAchievement,
+  type JournalEntry,
+  type InsertJournalEntry,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sql, asc } from "drizzle-orm";
@@ -114,6 +117,13 @@ export interface IStorage {
   unlockAchievement(userId: string, achievementId: number): Promise<UserAchievement | null>;
   updateAchievementProgress(userId: string, achievementId: number, progress: number): Promise<UserAchievement | undefined>;
   hasUserAchievement(userId: string, achievementId: number): Promise<boolean>;
+
+  // Journal Entry operations
+  getJournalEntries(userId: string, limit?: number): Promise<JournalEntry[]>;
+  getJournalEntry(id: number): Promise<JournalEntry | undefined>;
+  createJournalEntry(entry: InsertJournalEntry): Promise<JournalEntry>;
+  updateJournalEntry(id: number, updates: Partial<InsertJournalEntry>): Promise<JournalEntry | undefined>;
+  deleteJournalEntry(id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -545,6 +555,39 @@ export class DatabaseStorage implements IStorage {
         )
       );
     return !!existing;
+  }
+
+  // Journal Entry operations
+  async getJournalEntries(userId: string, limit = 50): Promise<JournalEntry[]> {
+    return db
+      .select()
+      .from(journalEntries)
+      .where(eq(journalEntries.userId, userId))
+      .orderBy(desc(journalEntries.createdAt))
+      .limit(limit);
+  }
+
+  async getJournalEntry(id: number): Promise<JournalEntry | undefined> {
+    const [entry] = await db.select().from(journalEntries).where(eq(journalEntries.id, id));
+    return entry;
+  }
+
+  async createJournalEntry(entry: InsertJournalEntry): Promise<JournalEntry> {
+    const [newEntry] = await db.insert(journalEntries).values(entry).returning();
+    return newEntry;
+  }
+
+  async updateJournalEntry(id: number, updates: Partial<InsertJournalEntry>): Promise<JournalEntry | undefined> {
+    const [updated] = await db
+      .update(journalEntries)
+      .set(updates)
+      .where(eq(journalEntries.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteJournalEntry(id: number): Promise<void> {
+    await db.delete(journalEntries).where(eq(journalEntries.id, id));
   }
 }
 

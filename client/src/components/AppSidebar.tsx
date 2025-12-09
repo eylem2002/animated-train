@@ -10,6 +10,7 @@ import {
   LogOut,
   Settings,
   BrainCircuit,
+  Mic,
 } from "lucide-react";
 import {
   Sidebar,
@@ -118,6 +119,18 @@ export function AppSidebar() {
                   <Link href="/coach">
                     <BrainCircuit className="h-4 w-4" />
                     <span>Weekly Coach</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={location === "/journal"}
+                  data-testid="nav-journal"
+                >
+                  <Link href="/journal">
+                    <Mic className="h-4 w-4" />
+                    <span>Voice Journal</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
