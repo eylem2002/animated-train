@@ -50,55 +50,26 @@ export function AIGoalModal({
     if (!prompt.trim()) return;
     setIsGenerating(true);
     
-    // Simulate AI generation - will be connected to backend
-    setTimeout(() => {
-      setGeneratedGoals([
-        {
-          id: "1",
-          title: "Complete Advanced React Course",
-          description: "Master React patterns, hooks, and state management",
-          category: "education",
-          targetDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          milestones: [
-            "Complete React fundamentals review",
-            "Master custom hooks",
-            "Build 3 practice projects",
-            "Learn testing with Jest",
-          ],
-          dailyHabits: ["Study 1 hour of React", "Code 30 minutes daily"],
-        },
-        {
-          id: "2",
-          title: "Build Portfolio Website",
-          description: "Create a stunning portfolio to showcase projects",
-          category: "career",
-          targetDate: new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          milestones: [
-            "Design wireframes",
-            "Set up development environment",
-            "Build homepage",
-            "Add project showcase section",
-            "Deploy to production",
-          ],
-          dailyHabits: ["Work on portfolio 45 mins", "Review one portfolio example"],
-        },
-        {
-          id: "3",
-          title: "Network with 10 Industry Professionals",
-          description: "Expand professional network for career opportunities",
-          category: "career",
-          targetDate: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-          milestones: [
-            "Update LinkedIn profile",
-            "Attend 2 virtual meetups",
-            "Reach out to 5 professionals",
-            "Schedule informational interviews",
-          ],
-          dailyHabits: ["Engage on LinkedIn 15 mins", "Send one connection request"],
-        },
-      ]);
+    try {
+      const response = await fetch("/api/ai/goals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ prompt }),
+      });
+      
+      if (!response.ok) {
+        throw new Error("Failed to generate goals");
+      }
+      
+      const data = await response.json();
+      setGeneratedGoals(data.goals || []);
+    } catch (error) {
+      console.error("Error generating goals:", error);
+      setGeneratedGoals([]);
+    } finally {
       setIsGenerating(false);
-    }, 2000);
+    }
   };
 
   const toggleGoalSelection = (goalId: string) => {

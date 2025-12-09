@@ -324,6 +324,14 @@ export async function registerRoutes(
   app.delete("/api/tasks/:id", isAuthenticated, async (req: any, res) => {
     try {
       const taskId = parseInt(req.params.id);
+      const task = await storage.getTask(taskId);
+      if (!task) {
+        return res.status(404).json({ message: "Task not found" });
+      }
+      const userId = req.user.claims.sub;
+      if (task.ownerId !== userId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
       await storage.deleteTask(taskId);
       res.status(204).send();
     } catch (error) {

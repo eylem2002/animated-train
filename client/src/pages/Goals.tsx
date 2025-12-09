@@ -33,6 +33,7 @@ import { TaskItem } from "@/components/TaskItem";
 import { AIGoalModal } from "@/components/AIGoalModal";
 import { ProgressRing } from "@/components/ProgressRing";
 import { useToast } from "@/hooks/use-toast";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Goal, Task } from "@shared/schema";
 
 const categories = [
@@ -68,6 +69,49 @@ export default function Goals() {
 
   const { data: tasks } = useQuery<Task[]>({
     queryKey: ["/api/tasks"],
+  });
+
+  const toggleTaskMutation = useMutation({
+    mutationFn: async (taskId: number) => {
+      const response = await apiRequest("POST", `/api/tasks/${taskId}/toggle`);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+    },
+    onError: () => {
+      toast({ title: "Failed to update task", variant: "destructive" });
+    },
+  });
+
+  const deleteTaskMutation = useMutation({
+    mutationFn: async (taskId: number) => {
+      await apiRequest("DELETE", `/api/tasks/${taskId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      toast({ title: "Task deleted" });
+    },
+    onError: () => {
+      toast({ title: "Failed to delete task", variant: "destructive" });
+    },
+  });
+
+  const createGoalMutation = useMutation({
+    mutationFn: async (goal: { title: string; description: string; category: string; targetDate: string }) => {
+      const response = await apiRequest("POST", "/api/goals", {
+        title: goal.title,
+        description: goal.description,
+        category: goal.category,
+        targetDate: goal.targetDate,
+        status: "planned",
+        progress: "0",
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+    },
   });
 
   const filteredGoals = goals?.filter((goal) => {
@@ -321,11 +365,11 @@ export default function Goals() {
                                 <TaskItem
                                   key={task.id}
                                   task={task}
-                                  onToggle={(id, completed) => {
-                                    console.log("Toggle task:", id, completed);
+                                  onToggle={(id) => {
+                                    toggleTaskMutation.mutate(id);
                                   }}
                                   onDelete={(id) => {
-                                    console.log("Delete task:", id);
+                                    deleteTaskMutation.mutate(id);
                                   }}
                                 />
                               ))}
@@ -378,8 +422,16 @@ export default function Goals() {
       <AIGoalModal
         open={showAIModal}
         onOpenChange={setShowAIModal}
-        onAcceptGoals={(goals) => {
-          toast({ title: `Added ${goals.length} goals!` });
+        onAcceptGoals={async (generatedGoals) => {
+          for (const goal of generatedGoals) {
+            await createGoalMutation.mutateAsync({
+              title: goal.title,
+              description: goal.description,
+              category: goal.category,
+              targetDate: goal.targetDate,
+            });
+          }
+          toast({ title: `Added ${generatedGoals.length} goal${generatedGoals.length !== 1 ? "s" : ""}!` });
         }}
       />
     </div>

@@ -15,6 +15,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StreakCounter } from "@/components/StreakCounter";
 import { ProgressRing } from "@/components/ProgressRing";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Task, CalendarEntry } from "@shared/schema";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -45,6 +46,21 @@ export default function Calendar() {
       month: currentDate.getMonth() + 1,
       year: currentDate.getFullYear(),
     }],
+  });
+
+  const checkInMutation = useMutation({
+    mutationFn: async ({ taskId, date, done, existingEntryId }: { taskId: number; date: string; done: boolean; existingEntryId?: number }) => {
+      if (existingEntryId) {
+        const response = await apiRequest("PATCH", `/api/calendar-entries/${existingEntryId}`, { done });
+        return response.json();
+      } else {
+        const response = await apiRequest("POST", "/api/calendar-entries", { taskId, date, done });
+        return response.json();
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar-entries"] });
+    },
   });
 
   const year = currentDate.getFullYear();
@@ -269,6 +285,14 @@ export default function Calendar() {
                         >
                           <Checkbox
                             checked={isDone}
+                            onCheckedChange={(checked) => {
+                              checkInMutation.mutate({
+                                taskId: habit.id,
+                                date: selectedDateStr,
+                                done: checked as boolean,
+                                existingEntryId: entry?.id,
+                              });
+                            }}
                             className="h-5 w-5"
                             data-testid={`checkbox-habit-${habit.id}`}
                           />
