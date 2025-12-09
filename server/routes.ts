@@ -1086,6 +1086,223 @@ Only return the JSON, nothing else.`
 
   // ==================== END JOURNAL ROUTES ====================
 
+  // ==================== NOTIFICATION ROUTES ====================
+
+  // Get user notifications
+  app.get("/api/notifications", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const unreadOnly = req.query.unreadOnly === "true";
+      const limit = parseInt(req.query.limit as string) || 50;
+      
+      const notificationList = await storage.getNotifications(userId, { unreadOnly, limit });
+      const unreadCount = await storage.getUnreadNotificationCount(userId);
+      
+      await storage.updateEngagement(userId, 1);
+      
+      res.json({ notifications: notificationList, unreadCount });
+    } catch (error) {
+      console.error("Error fetching notifications:", error);
+      res.status(500).json({ message: "Failed to fetch notifications" });
+    }
+  });
+
+  // Get unread count only
+  app.get("/api/notifications/count", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const count = await storage.getUnreadNotificationCount(userId);
+      res.json({ count });
+    } catch (error) {
+      console.error("Error fetching notification count:", error);
+      res.status(500).json({ message: "Failed to fetch count" });
+    }
+  });
+
+  // Mark notification as read
+  app.patch("/api/notifications/:id/read", isAuthenticated, async (req: any, res) => {
+    try {
+      const notificationId = parseInt(req.params.id);
+      const userId = req.user.claims.sub;
+      
+      const notification = await storage.getNotification(notificationId);
+      if (!notification) {
+        return res.status(404).json({ message: "Notification not found" });
+      }
+      if (notification.userId !== userId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      
+      const updated = await storage.markNotificationRead(notificationId);
+      await storage.updateEngagement(userId, 2);
+      
+      res.json(updated);
+    } catch (error) {
+      console.error("Error marking notification read:", error);
+      res.status(500).json({ message: "Failed to mark read" });
+    }
+  });
+
+  // Mark all notifications as read
+  app.post("/api/notifications/read-all", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      await storage.markAllNotificationsRead(userId);
+      await storage.updateEngagement(userId, 5);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error marking all read:", error);
+      res.status(500).json({ message: "Failed to mark all read" });
+    }
+  });
+
+  // Dismiss notification
+  app.delete("/api/notifications/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const notificationId = parseInt(req.params.id);
+      const userId = req.user.claims.sub;
+      
+      const notification = await storage.getNotification(notificationId);
+      if (!notification) {
+        return res.status(404).json({ message: "Notification not found" });
+      }
+      if (notification.userId !== userId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      
+      await storage.dismissNotification(notificationId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error dismissing notification:", error);
+      res.status(500).json({ message: "Failed to dismiss" });
+    }
+  });
+
+  // Get notification preferences
+  app.get("/api/notifications/preferences", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      let prefs = await storage.getNotificationPreferences(userId);
+      
+      if (!prefs) {
+        prefs = await storage.upsertNotificationPreferences({ userId });
+      }
+      
+      res.json(prefs);
+    } catch (error) {
+      console.error("Error fetching preferences:", error);
+      res.status(500).json({ message: "Failed to fetch preferences" });
+    }
+  });
+
+  // Update notification preferences
+  app.patch("/api/notifications/preferences", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const updates = req.body;
+      
+      const prefs = await storage.upsertNotificationPreferences({
+        userId,
+        ...updates,
+      });
+      
+      res.json(prefs);
+    } catch (error) {
+      console.error("Error updating preferences:", error);
+      res.status(500).json({ message: "Failed to update preferences" });
+    }
+  });
+
+  // Generate contextual notifications based on user activity
+  app.post("/api/notifications/generate", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const prefs = await storage.getNotificationPreferences(userId);
+      
+      if (!prefs?.enabled) {
+        return res.json({ generated: 0 });
+      }
+      
+      const notificationsToCreate: any[] = [];
+      
+      if (prefs.streakWarnings) {
+        const tasks = await storage.getTasks(userId);
+        const habitsAtRisk = tasks.filter(t => 
+          t.type === "habit" && 
+          t.streakCount && 
+          t.streakCount > 0 &&
+          t.lastDone && 
+          Date.now() - new Date(t.lastDone).getTime() > 20 * 60 * 60 * 1000
+        );
+        
+        for (const habit of habitsAtRisk.slice(0, 3)) {
+          notificationsToCreate.push({
+            userId,
+            type: "streak_warning",
+            title: "Streak at Risk!",
+            message: `Your ${habit.streakCount}-day streak for "${habit.title}" is about to break. Complete it before midnight!`,
+            actionUrl: `/calendar`,
+            priority: "high",
+            metadata: { taskId: habit.id, streakCount: habit.streakCount },
+          });
+        }
+      }
+      
+      if (prefs.goalReminders) {
+        const goals = await storage.getGoals(userId);
+        const upcomingGoals = goals.filter(g => {
+          if (!g.targetDate) return false;
+          const daysUntil = (new Date(g.targetDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24);
+          return daysUntil > 0 && daysUntil < 7 && parseFloat(g.progress?.toString() || "0") < 80;
+        });
+        
+        for (const goal of upcomingGoals.slice(0, 2)) {
+          notificationsToCreate.push({
+            userId,
+            type: "goal_reminder",
+            title: "Goal Deadline Approaching",
+            message: `"${goal.title}" is due soon with ${goal.progress}% complete. Need to pick up the pace?`,
+            actionUrl: `/goals`,
+            priority: "normal",
+            metadata: { goalId: goal.id },
+          });
+        }
+      }
+      
+      if (prefs.habitPrompts) {
+        const tasks = await storage.getTasks(userId);
+        const incompleteTodayHabits = tasks.filter(t => {
+          if (t.type !== "habit") return false;
+          if (!t.lastDone) return true;
+          const lastDoneDate = new Date(t.lastDone).toDateString();
+          return lastDoneDate !== new Date().toDateString();
+        });
+        
+        if (incompleteTodayHabits.length > 0) {
+          notificationsToCreate.push({
+            userId,
+            type: "habit_prompt",
+            title: "Daily Habits Waiting",
+            message: `You have ${incompleteTodayHabits.length} habit${incompleteTodayHabits.length > 1 ? "s" : ""} to complete today. Keep building those streaks!`,
+            actionUrl: `/calendar`,
+            priority: "normal",
+          });
+        }
+      }
+      
+      for (const notif of notificationsToCreate) {
+        await storage.createNotification(notif);
+      }
+      
+      res.json({ generated: notificationsToCreate.length });
+    } catch (error) {
+      console.error("Error generating notifications:", error);
+      res.status(500).json({ message: "Failed to generate notifications" });
+    }
+  });
+
+  // ==================== END NOTIFICATION ROUTES ====================
+
   // Share link routes
   app.post("/api/boards/:id/share", isAuthenticated, async (req: any, res) => {
     try {

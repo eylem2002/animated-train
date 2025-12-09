@@ -207,6 +207,46 @@ export const journalEntries = pgTable("journal_entries", {
   index("IDX_journal_entries_created").on(table.createdAt),
 ]);
 
+// Smart Notifications
+export const notifications = pgTable("notifications", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  type: varchar("type", { length: 50 }).notNull(), // goal_reminder, streak_warning, habit_prompt, weekly_review, achievement_unlock, etc.
+  title: text("title").notNull(),
+  message: text("message").notNull(),
+  actionUrl: text("action_url"), // Deep link to relevant content
+  priority: varchar("priority", { length: 20 }).notNull().default("normal"), // low, normal, high, urgent
+  metadata: jsonb("metadata"), // Additional context data
+  read: boolean("read").default(false),
+  dismissed: boolean("dismissed").default(false),
+  scheduledFor: timestamp("scheduled_for"), // For scheduled notifications
+  sentAt: timestamp("sent_at"),
+  expiresAt: timestamp("expires_at"), // When notification becomes irrelevant
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("IDX_notifications_user").on(table.userId),
+  index("IDX_notifications_read").on(table.userId, table.read),
+  index("IDX_notifications_scheduled").on(table.scheduledFor),
+]);
+
+// User Notification Preferences
+export const notificationPreferences = pgTable("notification_preferences", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }).unique(),
+  enabled: boolean("enabled").default(true),
+  goalReminders: boolean("goal_reminders").default(true),
+  streakWarnings: boolean("streak_warnings").default(true),
+  habitPrompts: boolean("habit_prompts").default(true),
+  weeklyReviews: boolean("weekly_reviews").default(true),
+  achievementAlerts: boolean("achievement_alerts").default(true),
+  quietHoursStart: integer("quiet_hours_start"), // Hour of day (0-23)
+  quietHoursEnd: integer("quiet_hours_end"), // Hour of day (0-23)
+  frequency: varchar("frequency", { length: 20 }).default("balanced"), // minimal, balanced, frequent
+  lastEngagement: timestamp("last_engagement"), // Track user engagement for adaptive frequency
+  engagementScore: integer("engagement_score").default(50), // 0-100 score for adaptive reminders
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Relations
 export const usersRelations = relations(users, ({ many, one }) => ({
   visionBoards: many(visionBoards),
@@ -218,6 +258,22 @@ export const usersRelations = relations(users, ({ many, one }) => ({
   badges: many(userBadges),
   achievements: many(userAchievements),
   journalEntries: many(journalEntries),
+  notifications: many(notifications),
+  notificationPreferences: one(notificationPreferences),
+}));
+
+export const notificationsRelations = relations(notifications, ({ one }) => ({
+  user: one(users, {
+    fields: [notifications.userId],
+    references: [users.id],
+  }),
+}));
+
+export const notificationPreferencesRelations = relations(notificationPreferences, ({ one }) => ({
+  user: one(users, {
+    fields: [notificationPreferences.userId],
+    references: [users.id],
+  }),
 }));
 
 export const journalEntriesRelations = relations(journalEntries, ({ one }) => ({
@@ -411,6 +467,16 @@ export const insertJournalEntrySchema = createInsertSchema(journalEntries).omit(
   createdAt: true,
 });
 
+export const insertNotificationSchema = createInsertSchema(notifications).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertNotificationPreferencesSchema = createInsertSchema(notificationPreferences).omit({
+  id: true,
+  updatedAt: true,
+});
+
 // Types
 export type User = typeof users.$inferSelect;
 export type UpsertUser = typeof users.$inferInsert;
@@ -454,6 +520,12 @@ export type InsertUserAchievement = z.infer<typeof insertUserAchievementSchema>;
 
 export type JournalEntry = typeof journalEntries.$inferSelect;
 export type InsertJournalEntry = z.infer<typeof insertJournalEntrySchema>;
+
+export type Notification = typeof notifications.$inferSelect;
+export type InsertNotification = z.infer<typeof insertNotificationSchema>;
+
+export type NotificationPreferences = typeof notificationPreferences.$inferSelect;
+export type InsertNotificationPreferences = z.infer<typeof insertNotificationPreferencesSchema>;
 
 // Achievement requirement type
 export interface AchievementRequirement {

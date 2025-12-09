@@ -7,6 +7,7 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { ThemeProvider } from "@/lib/theme";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { AppSidebar } from "@/components/AppSidebar";
+import { NotificationCenter } from "@/components/NotificationCenter";
 import { useAuth } from "@/hooks/useAuth";
 import NotFound from "@/pages/not-found";
 import Landing from "@/pages/Landing";
@@ -32,7 +33,10 @@ function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
         <div className="flex flex-col flex-1 overflow-hidden">
           <header className="flex items-center justify-between gap-4 p-2 border-b bg-background/95 backdrop-blur-sm h-14 shrink-0">
             <SidebarTrigger data-testid="button-sidebar-toggle" />
-            <ThemeToggle />
+            <div className="flex items-center gap-2">
+              <NotificationCenter />
+              <ThemeToggle />
+            </div>
           </header>
           <main className="flex-1 overflow-y-auto">{children}</main>
         </div>

@@ -13,6 +13,8 @@ import {
   achievements,
   userAchievements,
   journalEntries,
+  notifications,
+  notificationPreferences,
   type User,
   type UpsertUser,
   type VisionBoard,
@@ -41,6 +43,10 @@ import {
   type InsertUserAchievement,
   type JournalEntry,
   type InsertJournalEntry,
+  type Notification,
+  type InsertNotification,
+  type NotificationPreferences,
+  type InsertNotificationPreferences,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sql, asc } from "drizzle-orm";
@@ -124,6 +130,20 @@ export interface IStorage {
   createJournalEntry(entry: InsertJournalEntry): Promise<JournalEntry>;
   updateJournalEntry(id: number, updates: Partial<InsertJournalEntry>): Promise<JournalEntry | undefined>;
   deleteJournalEntry(id: number): Promise<void>;
+
+  // Notification operations
+  getNotifications(userId: string, options?: { unreadOnly?: boolean; limit?: number }): Promise<Notification[]>;
+  getNotification(id: number): Promise<Notification | undefined>;
+  createNotification(notification: InsertNotification): Promise<Notification>;
+  markNotificationRead(id: number): Promise<Notification | undefined>;
+  markAllNotificationsRead(userId: string): Promise<void>;
+  dismissNotification(id: number): Promise<void>;
+  getUnreadNotificationCount(userId: string): Promise<number>;
+
+  // Notification Preferences operations
+  getNotificationPreferences(userId: string): Promise<NotificationPreferences | undefined>;
+  upsertNotificationPreferences(prefs: InsertNotificationPreferences): Promise<NotificationPreferences>;
+  updateEngagement(userId: string, engagementDelta: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -588,6 +608,114 @@ export class DatabaseStorage implements IStorage {
 
   async deleteJournalEntry(id: number): Promise<void> {
     await db.delete(journalEntries).where(eq(journalEntries.id, id));
+  }
+
+  // Notification operations
+  async getNotifications(userId: string, options?: { unreadOnly?: boolean; limit?: number }): Promise<Notification[]> {
+    const limit = options?.limit ?? 50;
+    
+    let query = db
+      .select()
+      .from(notifications)
+      .where(
+        options?.unreadOnly
+          ? and(eq(notifications.userId, userId), eq(notifications.read, false), eq(notifications.dismissed, false))
+          : and(eq(notifications.userId, userId), eq(notifications.dismissed, false))
+      )
+      .orderBy(desc(notifications.createdAt))
+      .limit(limit);
+
+    return query;
+  }
+
+  async getNotification(id: number): Promise<Notification | undefined> {
+    const [notification] = await db.select().from(notifications).where(eq(notifications.id, id));
+    return notification;
+  }
+
+  async createNotification(notification: InsertNotification): Promise<Notification> {
+    const [newNotification] = await db.insert(notifications).values(notification).returning();
+    return newNotification;
+  }
+
+  async markNotificationRead(id: number): Promise<Notification | undefined> {
+    const [updated] = await db
+      .update(notifications)
+      .set({ read: true })
+      .where(eq(notifications.id, id))
+      .returning();
+    return updated;
+  }
+
+  async markAllNotificationsRead(userId: string): Promise<void> {
+    await db
+      .update(notifications)
+      .set({ read: true })
+      .where(and(eq(notifications.userId, userId), eq(notifications.read, false)));
+  }
+
+  async dismissNotification(id: number): Promise<void> {
+    await db
+      .update(notifications)
+      .set({ dismissed: true })
+      .where(eq(notifications.id, id));
+  }
+
+  async getUnreadNotificationCount(userId: string): Promise<number> {
+    const result = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(notifications)
+      .where(and(
+        eq(notifications.userId, userId),
+        eq(notifications.read, false),
+        eq(notifications.dismissed, false)
+      ));
+    return Number(result[0]?.count ?? 0);
+  }
+
+  // Notification Preferences operations
+  async getNotificationPreferences(userId: string): Promise<NotificationPreferences | undefined> {
+    const [prefs] = await db
+      .select()
+      .from(notificationPreferences)
+      .where(eq(notificationPreferences.userId, userId));
+    return prefs;
+  }
+
+  async upsertNotificationPreferences(prefs: InsertNotificationPreferences): Promise<NotificationPreferences> {
+    const [result] = await db
+      .insert(notificationPreferences)
+      .values(prefs)
+      .onConflictDoUpdate({
+        target: notificationPreferences.userId,
+        set: {
+          ...prefs,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  async updateEngagement(userId: string, engagementDelta: number): Promise<void> {
+    const prefs = await this.getNotificationPreferences(userId);
+    if (prefs) {
+      const newScore = Math.max(0, Math.min(100, (prefs.engagementScore ?? 50) + engagementDelta));
+      await db
+        .update(notificationPreferences)
+        .set({ 
+          engagementScore: newScore,
+          lastEngagement: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(notificationPreferences.userId, userId));
+    } else {
+      await this.upsertNotificationPreferences({
+        userId,
+        engagementScore: Math.max(0, Math.min(100, 50 + engagementDelta)),
+        lastEngagement: new Date(),
+      });
+    }
   }
 }
 
