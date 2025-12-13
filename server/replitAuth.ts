@@ -66,6 +66,45 @@ export async function setupAuth(app: Express) {
   app.use(passport.initialize());
   app.use(passport.session());
 
+  // Development auth bypass: allows local runs without OIDC client setup
+  if (process.env.NODE_ENV !== "production" && process.env.DEV_AUTH_BYPASS === "true") {
+    // Seed a fake user into the session if not present
+    app.use((req, _res, next) => {
+      if (!req.user) {
+        (req as any).user = {
+          claims: {
+            sub: "dev-user",
+            email: "dev@example.com",
+            first_name: "Dev",
+            last_name: "User",
+            profile_image_url: null,
+            exp: Math.floor(Date.now() / 1000) + 60 * 60, // +1h
+          },
+          access_token: "dev-token",
+          refresh_token: "dev-refresh",
+          expires_at: Math.floor(Date.now() / 1000) + 60 * 60,
+        } as any;
+      }
+      next();
+    });
+
+    // Minimal login/logout endpoints for local testing
+    app.get("/api/login", (_req, res) => res.redirect("/"));
+    app.get("/api/callback", (_req, res) => res.redirect("/"));
+    app.get("/api/logout", (_req, res) => res.redirect("/"));
+
+    // Ensure the dev user exists in DB for downstream queries
+    await upsertUser({
+      sub: "dev-user",
+      email: "dev@example.com",
+      first_name: "Dev",
+      last_name: "User",
+      profile_image_url: null,
+    });
+
+    return; // Skip OIDC setup entirely
+  }
+
   const config = await getOidcConfig();
 
   const verify: VerifyFunction = async (
@@ -129,6 +168,10 @@ export async function setupAuth(app: Express) {
 }
 
 export const isAuthenticated: RequestHandler = async (req, res, next) => {
+  // Bypass in development when enabled
+  if (process.env.NODE_ENV !== "production" && process.env.DEV_AUTH_BYPASS === "true") {
+    return next();
+  }
   const user = req.user as any;
 
   if (!req.isAuthenticated() || !user.expires_at) {
