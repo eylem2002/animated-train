@@ -2,6 +2,9 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
+import { TextEditorDialog, type TextFormatting } from "@/components/TextEditorDialog";
+import { DrawingCanvas } from "@/components/DrawingCanvas";
+import { WallToolsMenu } from "@/components/WallToolsMenu";
 import {
   ArrowLeft,
   Save,
@@ -39,13 +42,23 @@ import {
 } from "@/components/ui/sheet";
 import { useToast } from "@/hooks/use-toast";
 import { VisionRoom } from "@/components/VisionRoom";
+import {
+  VisionCanvas,
+  type VisionCanvasObject,
+} from "@/components/toolbar/VisionCanvas";
+import { VisionToolbar } from "@/components/toolbar/VisionToolbar";
 import { ObjectUploader } from "@/components/ObjectUploader";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useCollaboration } from "@/hooks/useCollaboration";
-import { PresenceAvatars, CollaboratorCursors, ConnectionStatus } from "@/components/CollaboratorCursors";
+import {
+  PresenceAvatars,
+  CollaboratorCursors,
+  ConnectionStatus,
+} from "@/components/CollaboratorCursors";
 import type { VisionBoard, Asset, AssetMetadata } from "@shared/schema";
 
+// In future, load/save VisionObjects here and pass into VisionRoom
 export default function BoardEditor() {
   const [, params] = useRoute("/boards/:id");
   const [, navigate] = useLocation();
@@ -60,9 +73,18 @@ export default function BoardEditor() {
   const [visibility, setVisibility] = useState("private");
   const [selectedAssetId, setSelectedAssetId] = useState<number | null>(null);
   const [showLeftPanel, setShowLeftPanel] = useState(true);
+  const [activeTool, setActiveTool] = useState<string | null>(null);
+  const [showTextEditor, setShowTextEditor] = useState(false);
+  const [showDrawingCanvas, setShowDrawingCanvas] = useState(false);
+  const [editingAsset, setEditingAsset] = useState<any>(null);
+  const [selectedWall, setSelectedWall] = useState<{
+    name: string;
+    position: { x: number; y: number; z: number };
+  } | null>(null);
+  const [showWallMenu, setShowWallMenu] = useState(false);
 
   const numericBoardId = !isNew && boardId ? parseInt(boardId, 10) : 0;
-  
+
   const {
     collaborators,
     connected,
@@ -72,27 +94,37 @@ export default function BoardEditor() {
   } = useCollaboration({
     boardId: numericBoardId,
     userId: user?.id || "",
-    userName: user?.firstName && user?.lastName 
-      ? `${user.firstName} ${user.lastName}` 
-      : user?.email || "Anonymous",
+    userName:
+      user?.firstName && user?.lastName
+        ? `${user.firstName} ${user.lastName}`
+        : user?.email || "Anonymous",
     userAvatar: user?.profileImageUrl || null,
     enabled: !isNew && !!user?.id,
   });
 
   useEffect(() => {
     const unsubscribe = onMessage((type, payload) => {
-      if (type === "asset_update" || type === "asset_create" || type === "asset_delete") {
-        queryClient.invalidateQueries({ queryKey: ["/api/boards", boardId, "assets"] });
+      if (
+        type === "asset_update" ||
+        type === "asset_create" ||
+        type === "asset_delete"
+      ) {
+        queryClient.invalidateQueries({
+          queryKey: ["/api/boards", boardId, "assets"],
+        });
       }
     });
     return unsubscribe;
   }, [onMessage, boardId]);
 
-  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (!editorContainerRef.current || !connected) return;
-    const rect = editorContainerRef.current.getBoundingClientRect();
-    sendCursorPosition(e.clientX - rect.left, e.clientY - rect.top);
-  }, [connected, sendCursorPosition]);
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!editorContainerRef.current || !connected) return;
+      const rect = editorContainerRef.current.getBoundingClientRect();
+      sendCursorPosition(e.clientX - rect.left, e.clientY - rect.top);
+    },
+    [connected, sendCursorPosition]
+  );
 
   const { data: board, isLoading: boardLoading } = useQuery<VisionBoard>({
     queryKey: ["/api/boards", boardId],
@@ -101,6 +133,13 @@ export default function BoardEditor() {
 
   const { data: assets = [], isLoading: assetsLoading } = useQuery<Asset[]>({
     queryKey: ["/api/boards", boardId, "assets"],
+    enabled: !isNew && !!boardId,
+  });
+
+  const { data: objects = [], isLoading: objectsLoading } = useQuery<
+    VisionCanvasObject[]
+  >({
+    queryKey: ["/api/boards", boardId, "objects"],
     enabled: !isNew && !!boardId,
   });
 
@@ -113,7 +152,11 @@ export default function BoardEditor() {
   }, [board]);
 
   const createBoardMutation = useMutation({
-    mutationFn: async (data: { title: string; description: string; visibility: string }) => {
+    mutationFn: async (data: {
+      title: string;
+      description: string;
+      visibility: string;
+    }) => {
       const response = await apiRequest("POST", "/api/boards", data);
       return response.json();
     },
@@ -128,7 +171,11 @@ export default function BoardEditor() {
   });
 
   const updateBoardMutation = useMutation({
-    mutationFn: async (data: { title: string; description: string; visibility: string }) => {
+    mutationFn: async (data: {
+      title: string;
+      description: string;
+      visibility: string;
+    }) => {
       return apiRequest("PATCH", `/api/boards/${boardId}`, data);
     },
     onSuccess: () => {
@@ -181,7 +228,11 @@ export default function BoardEditor() {
             data-testid="input-board-title"
           />
           <Badge variant="secondary">
-            {visibility === "private" ? "Private" : visibility === "public" ? "Public" : "Unlisted"}
+            {visibility === "private"
+              ? "Private"
+              : visibility === "public"
+              ? "Public"
+              : "Unlisted"}
           </Badge>
         </div>
 
@@ -219,7 +270,9 @@ export default function BoardEditor() {
               </SheetHeader>
               <div className="space-y-4 mt-6">
                 <div>
-                  <label className="text-sm font-medium mb-2 block">Description</label>
+                  <label className="text-sm font-medium mb-2 block">
+                    Description
+                  </label>
                   <Textarea
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
@@ -229,7 +282,9 @@ export default function BoardEditor() {
                   />
                 </div>
                 <div>
-                  <label className="text-sm font-medium mb-2 block">Visibility</label>
+                  <label className="text-sm font-medium mb-2 block">
+                    Visibility
+                  </label>
                   <Select value={visibility} onValueChange={setVisibility}>
                     <SelectTrigger data-testid="select-board-visibility">
                       <SelectValue />
@@ -249,8 +304,13 @@ export default function BoardEditor() {
           </Button>
           <Button
             onClick={handleSave}
-            disabled={createBoardMutation.isPending || updateBoardMutation.isPending}
+            disabled={
+              createBoardMutation.isPending ||
+              updateBoardMutation.isPending ||
+              title.trim().length === 0
+            }
             data-testid="button-save-board"
+            title={title.trim().length === 0 ? "Enter a title to save" : undefined}
           >
             <Save className="h-4 w-4 mr-2" />
             Save
@@ -275,8 +335,13 @@ export default function BoardEditor() {
                   <h3 className="font-semibold">Assets</h3>
                   <ObjectUploader
                     onGetUploadParameters={async () => {
-                      const response = await apiRequest("POST", "/api/objects/upload");
-                      const data = await response.json() as { uploadURL: string };
+                      const response = await apiRequest(
+                        "POST",
+                        "/api/objects/upload"
+                      );
+                      const data = (await response.json()) as {
+                        uploadURL: string;
+                      };
                       return { method: "PUT" as const, url: data.uploadURL };
                     }}
                     onComplete={(result) => {
@@ -329,8 +394,8 @@ export default function BoardEditor() {
           )}
         </AnimatePresence>
 
-        {/* 3D Canvas */}
-        <div 
+        {/* 3D Canvas + 2D Overlay */}
+        <div
           ref={editorContainerRef}
           className="flex-1 relative"
           onMouseMove={handleMouseMove}
@@ -339,9 +404,205 @@ export default function BoardEditor() {
           <VisionRoom
             assets={assets}
             selectedAssetId={selectedAssetId}
-            onAssetClick={(asset) => setSelectedAssetId(asset.id)}
+            onAssetClick={(asset) => {
+              setSelectedAssetId(asset.id);
+              setShowWallMenu(false); // Close wall menu when clicking asset
+            }}
+            onWallClick={(wallName, position) => {
+              // When user clicks a wall, show tools for that wall
+              setSelectedWall({ name: wallName, position });
+              setShowWallMenu(true);
+              setSelectedAssetId(null); // Deselect any selected asset
+            }}
+            onAssetEdit={(asset) => {
+              // Double click to edit - open text editor with existing data
+              if (asset.type === "text" || asset.type === "note") {
+                const meta = asset.metadata as any;
+                setEditingAsset({
+                  id: asset.id,
+                  type: asset.type,
+                  position: meta.position,
+                  existingData: {
+                    text: meta.text || "",
+                    fontSize: meta.fontSize || (asset.type === "note" ? 16 : 32),
+                    fontFamily: meta.fontFamily || (asset.type === "note" ? "monospace" : "sans-serif"),
+                    color: meta.color || (asset.type === "note" ? "#000000" : "#ffffff"),
+                    backgroundColor: meta.backgroundColor || (asset.type === "note" ? "#fef08a" : "rgba(31, 41, 55, 0.9)"),
+                    bold: meta.bold || false,
+                    italic: meta.italic || false,
+                    underline: meta.underline || false,
+                    alignment: meta.alignment || "left",
+                  }
+                });
+                setShowTextEditor(true);
+              }
+            }}
+            onAssetMove={async (assetId, position) => {
+              // Update asset position when dragged
+              try {
+                const asset = assets.find(a => a.id === assetId);
+                if (!asset) return;
+
+                const currentMetadata = asset.metadata as any || {};
+                const updatedMetadata = {
+                  ...currentMetadata,
+                  position: { x: position.x, y: position.y, z: position.z }
+                };
+
+                await apiRequest("PATCH", `/api/assets/${assetId}`, {
+                  metadata: updatedMetadata
+                });
+
+                queryClient.invalidateQueries({
+                  queryKey: ["/api/boards", boardId, "assets"],
+                });
+              } catch (error) {
+                console.error("Error updating asset position:", error);
+              }
+            }}
           />
-          <CollaboratorCursors 
+          {/* 2D Vision Objects Canvas */}
+          {!objectsLoading && objects.length > 0 && (
+            <VisionCanvas
+              objects={objects}
+              selectedId={null}
+              onSelect={() => {}}
+              onDeselect={() => {}}
+              onChange={(id, updates) => {
+                // Optimistic update and persist
+                queryClient.setQueryData<VisionCanvasObject[]>(
+                  ["/api/boards", boardId, "objects"],
+                  (prev) =>
+                    (prev || []).map((o) =>
+                      o.id === id ? { ...o, ...updates } : o
+                    )
+                );
+                apiRequest("PATCH", `/api/objects/${id}`, updates);
+              }}
+            />
+          )}
+          {/* Toolbar */}
+          <div className="absolute top-4 right-4 z-20 rounded-md border bg-background/90">
+            <VisionToolbar
+              activeTool={activeTool}
+              onAction={async (action) => {
+                if (isNew || !numericBoardId) {
+                  toast({
+                    title: "Save the board first",
+                    description:
+                      "Create and save the board before adding objects.",
+                  });
+                  return;
+                }
+
+                // Handle different toolbar actions
+                try {
+                  if (action === "draw") {
+                    // Open drawing canvas
+                    setShowDrawingCanvas(true);
+                    setActiveTool("draw");
+                  } else if (action === "note") {
+                    // Open text editor for sticky note
+                    setEditingAsset({
+                      type: "note",
+                      position: {
+                        x: (Math.random() - 0.5) * 8,
+                        y: 2 + Math.random() * 4,
+                        z: -9.8
+                      }
+                    });
+                    setShowTextEditor(true);
+                  } else if (action === "pin") {
+                    // Create a pin marker
+                    const randomX = (Math.random() - 0.5) * 8;
+                    const randomY = 2 + Math.random() * 4;
+                    const response = await apiRequest(
+                      "POST",
+                      `/api/boards/${numericBoardId}/assets`,
+                      {
+                        type: "pin",
+                        url: "data:text/plain,Pin",
+                        altText: "Pin",
+                        metadata: {
+                          position: { x: randomX, y: randomY, z: -9.8 },
+                          scale: { x: 0.3, y: 0.3, z: 1 },
+                          color: "#ef4444" // Red pin
+                        }
+                      }
+                    );
+                    queryClient.invalidateQueries({
+                      queryKey: ["/api/boards", boardId, "assets"],
+                    });
+                    toast({ title: "Pin added - drag to reposition" });
+                  } else if (action === "text") {
+                    // Open text editor for floating text
+                    setEditingAsset({
+                      type: "text",
+                      position: { x: 0, y: 3, z: -5 }
+                    });
+                    setShowTextEditor(true);
+                  } else if (action === "image") {
+                    toast({
+                      title: "Upload an image",
+                      description: "Use the Add button in the Assets panel to upload images.",
+                    });
+                  } else if (action === "link") {
+                    // Create a link/reference asset
+                    const response = await apiRequest(
+                      "POST",
+                      `/api/boards/${numericBoardId}/assets`,
+                      {
+                        type: "link",
+                        url: "https://example.com",
+                        altText: "Web Link",
+                        metadata: {
+                          position: { x: 2, y: 3, z: -5 },
+                          scale: { x: 1.5, y: 1.5, z: 1 },
+                        }
+                      }
+                    );
+                    queryClient.invalidateQueries({
+                      queryKey: ["/api/boards", boardId, "assets"],
+                    });
+                    toast({ title: "Link added to vision board" });
+                  } else if (action === "goal") {
+                    toast({
+                      title: "Create a goal",
+                      description: "Go to the Goals page to create and link goals.",
+                    });
+                  } else if (action === "sticker") {
+                    toast({
+                      title: "Stickers coming soon",
+                      description: "This feature will be available in a future update.",
+                    });
+                  } else if (action === "delete") {
+                    if (selectedAssetId) {
+                      await apiRequest("DELETE", `/api/assets/${selectedAssetId}`);
+                      setSelectedAssetId(null);
+                      queryClient.invalidateQueries({
+                        queryKey: ["/api/boards", boardId, "assets"],
+                      });
+                      toast({ title: "Asset deleted" });
+                    } else {
+                      toast({
+                        title: "No asset selected",
+                        description: "Select an asset to delete it.",
+                        variant: "destructive"
+                      });
+                    }
+                  }
+                } catch (error) {
+                  console.error("Toolbar action error:", error);
+                  toast({
+                    title: "Action failed",
+                    description: "Could not complete the action. Please try again.",
+                    variant: "destructive"
+                  });
+                }
+              }}
+            />
+          </div>
+          <CollaboratorCursors
             collaborators={collaborators}
             containerRef={editorContainerRef}
           />
@@ -390,7 +651,9 @@ export default function BoardEditor() {
                 </div>
 
                 <div>
-                  <label className="text-sm font-medium mb-2 block">Position</label>
+                  <label className="text-sm font-medium mb-2 block">
+                    Position
+                  </label>
                   <div className="grid grid-cols-3 gap-2">
                     <div>
                       <span className="text-xs text-muted-foreground">X</span>
@@ -423,7 +686,9 @@ export default function BoardEditor() {
                 </div>
 
                 <div>
-                  <label className="text-sm font-medium mb-2 block">Scale</label>
+                  <label className="text-sm font-medium mb-2 block">
+                    Scale
+                  </label>
                   <Slider
                     value={[selectedMetadata.scale?.x || 2]}
                     min={0.5}
@@ -433,7 +698,9 @@ export default function BoardEditor() {
                 </div>
 
                 <div>
-                  <label className="text-sm font-medium mb-2 block">Alt Text</label>
+                  <label className="text-sm font-medium mb-2 block">
+                    Alt Text
+                  </label>
                   <Input
                     value={selectedAsset.altText || ""}
                     placeholder="Describe this image..."
@@ -444,6 +711,204 @@ export default function BoardEditor() {
           )}
         </AnimatePresence>
       </div>
+
+      {/* Wall Tools Menu */}
+      {showWallMenu && selectedWall && (
+        <WallToolsMenu
+          wallName={selectedWall.name}
+          onToolSelect={async (tool) => {
+            if (isNew || !numericBoardId) {
+              toast({
+                title: "Save the board first",
+                description: "Create and save the board before adding objects.",
+              });
+              return;
+            }
+
+            try {
+              if (tool === "note") {
+                // Open text editor for sticky note at wall position
+                setEditingAsset({
+                  type: "note",
+                  position: selectedWall.position,
+                });
+                setShowTextEditor(true);
+              } else if (tool === "pin") {
+                // Create pin at wall position
+                await apiRequest(
+                  "POST",
+                  `/api/boards/${numericBoardId}/assets`,
+                  {
+                    type: "pin",
+                    url: "data:text/plain,Pin",
+                    altText: "Pin",
+                    metadata: {
+                      position: selectedWall.position,
+                      scale: { x: 0.3, y: 0.3, z: 1 },
+                      color: "#ef4444",
+                    }
+                  }
+                );
+                queryClient.invalidateQueries({
+                  queryKey: ["/api/boards", boardId, "assets"],
+                });
+                toast({ title: `Pin added to ${selectedWall.name} wall` });
+              } else if (tool === "text") {
+                // Open text editor for floating text at wall position
+                setEditingAsset({
+                  type: "text",
+                  position: selectedWall.position,
+                });
+                setShowTextEditor(true);
+              } else if (tool === "draw") {
+                // Open drawing canvas
+                setShowDrawingCanvas(true);
+              } else if (tool === "image") {
+                toast({
+                  title: "Upload an image",
+                  description: "Use the Add button in the Assets panel to upload images.",
+                });
+              }
+            } catch (error) {
+              console.error("Error adding to wall:", error);
+              toast({
+                title: "Action failed",
+                variant: "destructive",
+              });
+            }
+          }}
+          onClose={() => {
+            setShowWallMenu(false);
+            setSelectedWall(null);
+          }}
+        />
+      )}
+
+      {/* Drawing Canvas */}
+      {showDrawingCanvas && (
+        <DrawingCanvas
+          onSave={async (imageData: string) => {
+            try {
+              // Create drawing asset on wall - use selected wall position or default
+              const position = selectedWall?.position || {
+                x: (Math.random() - 0.5) * 8,
+                y: 2 + Math.random() * 4,
+                z: -9.8
+              };
+
+              await apiRequest(
+                "POST",
+                `/api/boards/${numericBoardId}/assets`,
+                {
+                  type: "image",
+                  url: imageData,
+                  altText: "Wall Drawing",
+                  metadata: {
+                    position,
+                    scale: { x: 3, y: 2.25, z: 1 },
+                  }
+                }
+              );
+
+              queryClient.invalidateQueries({
+                queryKey: ["/api/boards", boardId, "assets"],
+              });
+
+              setShowDrawingCanvas(false);
+              setActiveTool(null);
+              toast({
+                title: "Drawing added to wall",
+                description: "Click and drag to reposition"
+              });
+            } catch (error) {
+              console.error("Error saving drawing:", error);
+              toast({
+                title: "Failed to save drawing",
+                variant: "destructive"
+              });
+            }
+          }}
+          onCancel={() => {
+            setShowDrawingCanvas(false);
+            setActiveTool(null);
+          }}
+        />
+      )}
+
+      {/* Text Editor Dialog */}
+      <TextEditorDialog
+        open={showTextEditor}
+        onClose={() => {
+          setShowTextEditor(false);
+          setEditingAsset(null);
+        }}
+        initialData={editingAsset?.existingData}
+        onSave={async (textData: TextFormatting) => {
+          try {
+            const metadata: any = {
+              position: editingAsset.position,
+              scale: { x: 1.5, y: 1.5, z: 1 },
+              text: textData.text,
+              fontSize: textData.fontSize,
+              fontFamily: textData.fontFamily,
+              color: textData.color,
+              backgroundColor: textData.backgroundColor,
+              bold: textData.bold,
+              italic: textData.italic,
+              underline: textData.underline,
+              alignment: textData.alignment,
+            };
+
+            // For sticky notes, use yellow background by default
+            if (editingAsset.type === "note" && textData.backgroundColor === "transparent") {
+              metadata.backgroundColor = "#fef08a"; // Yellow sticky note
+            }
+
+            // If editing existing asset, update it
+            if (editingAsset.id) {
+              await apiRequest("PATCH", `/api/assets/${editingAsset.id}`, {
+                metadata,
+                url: `data:text/plain,${textData.text}`,
+              });
+
+              toast({
+                title: editingAsset.type === "note" ? "Sticky note updated" : "Text updated"
+              });
+            } else {
+              // Create new asset
+              await apiRequest(
+                "POST",
+                `/api/boards/${numericBoardId}/assets`,
+                {
+                  type: editingAsset.type,
+                  url: `data:text/plain,${textData.text}`,
+                  altText: editingAsset.type === "note" ? "Sticky Note" : "Text element",
+                  metadata,
+                }
+              );
+
+              toast({
+                title: editingAsset.type === "note" ? "Sticky note added" : "Text added",
+                description: "Click and drag to reposition"
+              });
+            }
+
+            queryClient.invalidateQueries({
+              queryKey: ["/api/boards", boardId, "assets"],
+            });
+          } catch (error) {
+            console.error("Error saving text:", error);
+            toast({
+              title: editingAsset?.id ? "Failed to update text" : "Failed to add text",
+              variant: "destructive"
+            });
+          }
+        }}
+        title={editingAsset?.id
+          ? (editingAsset?.type === "note" ? "Edit Sticky Note" : "Edit Text")
+          : (editingAsset?.type === "note" ? "Create Sticky Note" : "Create Text")
+        }
+      />
     </div>
   );
 }

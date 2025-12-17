@@ -37,12 +37,24 @@ export function VisionCanvas({
   const containerRef = useRef<HTMLDivElement>(null);
   const [stageSize, setStageSize] = useState({ width: 1000, height: 700 });
 
-  const handleContainerRef = (el: HTMLDivElement | null) => {
-    containerRef.current = el as any;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    setStageSize({ width: rect.width, height: rect.height });
-  };
+  useEffect(() => {
+    const updateSize = () => {
+      if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        setStageSize((prev) => {
+          // Only update if size actually changed
+          if (prev.width !== rect.width || prev.height !== rect.height) {
+            return { width: rect.width, height: rect.height };
+          }
+          return prev;
+        });
+      }
+    };
+
+    updateSize();
+    window.addEventListener('resize', updateSize);
+    return () => window.removeEventListener('resize', updateSize);
+  }, []);
 
   const shapeRefs = useRef<Record<number, any>>({});
   const transformerRef = useRef<any>(null);
@@ -66,7 +78,7 @@ export function VisionCanvas({
   }, [selectedId, objects]);
 
   return (
-    <div className="absolute inset-0" ref={handleContainerRef}>
+    <div className="absolute inset-0" ref={containerRef}>
       <Stage
         width={stageSize.width}
         height={stageSize.height}

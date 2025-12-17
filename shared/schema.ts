@@ -28,7 +28,9 @@ export const sessions = pgTable(
 
 // Users table for Replit Auth
 export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
   email: varchar("email").unique(),
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),
@@ -41,10 +43,14 @@ export const users = pgTable("users", {
 // Vision Boards
 export const visionBoards = pgTable("vision_boards", {
   id: serial("id").primaryKey(),
-  ownerId: varchar("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  ownerId: varchar("owner_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   description: text("description"),
-  visibility: varchar("visibility", { length: 20 }).notNull().default("private"),
+  visibility: varchar("visibility", { length: 20 })
+    .notNull()
+    .default("private"),
   coverAssetUrl: text("cover_asset_url"),
   metadata: jsonb("metadata"),
   viewCount: integer("view_count").default(0),
@@ -53,10 +59,43 @@ export const visionBoards = pgTable("vision_boards", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Unified Vision Objects (source of truth for board items)
+export const visionObjects = pgTable("vision_objects", {
+  id: serial("id").primaryKey(),
+  boardId: integer("board_id")
+    .notNull()
+    .references(() => visionBoards.id, { onDelete: "cascade" }),
+  ownerId: varchar("owner_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  type: varchar("type", { length: 20 }).notNull(), // image | text | link | drawing | goal
+  x: integer("x").notNull().default(0),
+  y: integer("y").notNull().default(0),
+  width: integer("width"),
+  height: integer("height"),
+  rotation: integer("rotation").default(0),
+  zIndex: integer("z_index").default(0),
+  locked: boolean("locked").default(false),
+  data: jsonb("data"), // payload per type (src, text, url, drawing paths, etc.)
+  goalId: integer("goal_id").references(() => goals.id, {
+    onDelete: "set null",
+  }),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Insert schemas
+export const insertVisionObjectSchema = createInsertSchema(visionObjects, {
+  type: z.enum(["image", "text", "link", "drawing", "goal"]),
+  data: z.any().optional(),
+});
+
 // Assets (images, videos, audio, text blocks)
 export const assets = pgTable("assets", {
   id: serial("id").primaryKey(),
-  boardId: integer("board_id").notNull().references(() => visionBoards.id, { onDelete: "cascade" }),
+  boardId: integer("board_id")
+    .notNull()
+    .references(() => visionBoards.id, { onDelete: "cascade" }),
   type: varchar("type", { length: 20 }).notNull().default("image"),
   url: text("url").notNull(),
   altText: text("alt_text"),
@@ -69,8 +108,12 @@ export const assets = pgTable("assets", {
 // Goals
 export const goals = pgTable("goals", {
   id: serial("id").primaryKey(),
-  boardId: integer("board_id").references(() => visionBoards.id, { onDelete: "set null" }),
-  ownerId: varchar("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  boardId: integer("board_id").references(() => visionBoards.id, {
+    onDelete: "set null",
+  }),
+  ownerId: varchar("owner_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   description: text("description"),
   category: varchar("category", { length: 50 }),
@@ -86,8 +129,12 @@ export const goals = pgTable("goals", {
 // Tasks and Habits
 export const tasks = pgTable("tasks", {
   id: serial("id").primaryKey(),
-  goalId: integer("goal_id").references(() => goals.id, { onDelete: "cascade" }),
-  ownerId: varchar("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  goalId: integer("goal_id").references(() => goals.id, {
+    onDelete: "cascade",
+  }),
+  ownerId: varchar("owner_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
   type: varchar("type", { length: 20 }).notNull().default("task"),
   title: text("title").notNull(),
   notes: text("notes"),
@@ -101,8 +148,12 @@ export const tasks = pgTable("tasks", {
 // Calendar Entries (check-ins)
 export const calendarEntries = pgTable("calendar_entries", {
   id: serial("id").primaryKey(),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  taskId: integer("task_id").references(() => tasks.id, { onDelete: "cascade" }),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  taskId: integer("task_id").references(() => tasks.id, {
+    onDelete: "cascade",
+  }),
   date: date("date").notNull(),
   done: boolean("done").default(false),
   metadata: jsonb("metadata"),
@@ -111,7 +162,9 @@ export const calendarEntries = pgTable("calendar_entries", {
 // Shared Links
 export const sharedLinks = pgTable("shared_links", {
   id: serial("id").primaryKey(),
-  boardId: integer("board_id").notNull().references(() => visionBoards.id, { onDelete: "cascade" }),
+  boardId: integer("board_id")
+    .notNull()
+    .references(() => visionBoards.id, { onDelete: "cascade" }),
   token: varchar("token", { length: 64 }).notNull().unique(),
   expiresAt: timestamp("expires_at"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -120,7 +173,9 @@ export const sharedLinks = pgTable("shared_links", {
 // Weekly Summaries (AI Coach)
 export const weeklySummaries = pgTable("weekly_summaries", {
   id: serial("id").primaryKey(),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
   weekStartDate: date("week_start_date").notNull(),
   summary: text("summary").notNull(),
   highlights: jsonb("highlights"), // achievements, completed goals, etc.
@@ -134,7 +189,10 @@ export const weeklySummaries = pgTable("weekly_summaries", {
 // Gamification: User XP and Level
 export const userXp = pgTable("user_xp", {
   id: serial("id").primaryKey(),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }).unique(),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" })
+    .unique(),
   totalXp: integer("total_xp").notNull().default(0),
   level: integer("level").notNull().default(1),
   currentLevelXp: integer("current_level_xp").notNull().default(0),
@@ -156,14 +214,20 @@ export const badges = pgTable("badges", {
 });
 
 // Gamification: User Earned Badges
-export const userBadges = pgTable("user_badges", {
-  id: serial("id").primaryKey(),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  badgeId: integer("badge_id").notNull().references(() => badges.id, { onDelete: "cascade" }),
-  earnedAt: timestamp("earned_at").defaultNow(),
-}, (table) => [
-  index("IDX_user_badges_unique").on(table.userId, table.badgeId),
-]);
+export const userBadges = pgTable(
+  "user_badges",
+  {
+    id: serial("id").primaryKey(),
+    userId: varchar("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    badgeId: integer("badge_id")
+      .notNull()
+      .references(() => badges.id, { onDelete: "cascade" }),
+    earnedAt: timestamp("earned_at").defaultNow(),
+  },
+  (table) => [index("IDX_user_badges_unique").on(table.userId, table.badgeId)]
+);
 
 // Gamification: Achievement Definitions
 export const achievements = pgTable("achievements", {
@@ -178,61 +242,86 @@ export const achievements = pgTable("achievements", {
 });
 
 // Gamification: User Unlocked Achievements
-export const userAchievements = pgTable("user_achievements", {
-  id: serial("id").primaryKey(),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  achievementId: integer("achievement_id").notNull().references(() => achievements.id, { onDelete: "cascade" }),
-  unlockedAt: timestamp("unlocked_at").defaultNow(),
-  progress: integer("progress").notNull().default(0), // for tracking progress toward achievement
-}, (table) => [
-  index("IDX_user_achievements_unique").on(table.userId, table.achievementId),
-]);
+export const userAchievements = pgTable(
+  "user_achievements",
+  {
+    id: serial("id").primaryKey(),
+    userId: varchar("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    achievementId: integer("achievement_id")
+      .notNull()
+      .references(() => achievements.id, { onDelete: "cascade" }),
+    unlockedAt: timestamp("unlocked_at").defaultNow(),
+    progress: integer("progress").notNull().default(0), // for tracking progress toward achievement
+  },
+  (table) => [
+    index("IDX_user_achievements_unique").on(table.userId, table.achievementId),
+  ]
+);
 
 // Voice Journal Entries
-export const journalEntries = pgTable("journal_entries", {
-  id: serial("id").primaryKey(),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  title: text("title"),
-  transcript: text("transcript"), // Speech-to-text result
-  audioUrl: text("audio_url"), // Stored audio file
-  duration: integer("duration"), // Duration in seconds
-  mood: varchar("mood", { length: 20 }), // detected mood: happy, sad, neutral, excited, anxious, etc.
-  sentiment: numeric("sentiment", { precision: 4, scale: 3 }), // -1 to 1 sentiment score
-  tags: text("tags").array(),
-  goalId: integer("goal_id").references(() => goals.id, { onDelete: "set null" }),
-  isPrivate: boolean("is_private").default(true),
-  createdAt: timestamp("created_at").defaultNow(),
-}, (table) => [
-  index("IDX_journal_entries_user").on(table.userId),
-  index("IDX_journal_entries_created").on(table.createdAt),
-]);
+export const journalEntries = pgTable(
+  "journal_entries",
+  {
+    id: serial("id").primaryKey(),
+    userId: varchar("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    title: text("title"),
+    transcript: text("transcript"), // Speech-to-text result
+    audioUrl: text("audio_url"), // Stored audio file
+    duration: integer("duration"), // Duration in seconds
+    mood: varchar("mood", { length: 20 }), // detected mood: happy, sad, neutral, excited, anxious, etc.
+    sentiment: numeric("sentiment", { precision: 4, scale: 3 }), // -1 to 1 sentiment score
+    tags: text("tags").array(),
+    goalId: integer("goal_id").references(() => goals.id, {
+      onDelete: "set null",
+    }),
+    isPrivate: boolean("is_private").default(true),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => [
+    index("IDX_journal_entries_user").on(table.userId),
+    index("IDX_journal_entries_created").on(table.createdAt),
+  ]
+);
 
 // Smart Notifications
-export const notifications = pgTable("notifications", {
-  id: serial("id").primaryKey(),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  type: varchar("type", { length: 50 }).notNull(), // goal_reminder, streak_warning, habit_prompt, weekly_review, achievement_unlock, etc.
-  title: text("title").notNull(),
-  message: text("message").notNull(),
-  actionUrl: text("action_url"), // Deep link to relevant content
-  priority: varchar("priority", { length: 20 }).notNull().default("normal"), // low, normal, high, urgent
-  metadata: jsonb("metadata"), // Additional context data
-  read: boolean("read").default(false),
-  dismissed: boolean("dismissed").default(false),
-  scheduledFor: timestamp("scheduled_for"), // For scheduled notifications
-  sentAt: timestamp("sent_at"),
-  expiresAt: timestamp("expires_at"), // When notification becomes irrelevant
-  createdAt: timestamp("created_at").defaultNow(),
-}, (table) => [
-  index("IDX_notifications_user").on(table.userId),
-  index("IDX_notifications_read").on(table.userId, table.read),
-  index("IDX_notifications_scheduled").on(table.scheduledFor),
-]);
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: serial("id").primaryKey(),
+    userId: varchar("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    type: varchar("type", { length: 50 }).notNull(), // goal_reminder, streak_warning, habit_prompt, weekly_review, achievement_unlock, etc.
+    title: text("title").notNull(),
+    message: text("message").notNull(),
+    actionUrl: text("action_url"), // Deep link to relevant content
+    priority: varchar("priority", { length: 20 }).notNull().default("normal"), // low, normal, high, urgent
+    metadata: jsonb("metadata"), // Additional context data
+    read: boolean("read").default(false),
+    dismissed: boolean("dismissed").default(false),
+    scheduledFor: timestamp("scheduled_for"), // For scheduled notifications
+    sentAt: timestamp("sent_at"),
+    expiresAt: timestamp("expires_at"), // When notification becomes irrelevant
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => [
+    index("IDX_notifications_user").on(table.userId),
+    index("IDX_notifications_read").on(table.userId, table.read),
+    index("IDX_notifications_scheduled").on(table.scheduledFor),
+  ]
+);
 
 // User Notification Preferences
 export const notificationPreferences = pgTable("notification_preferences", {
   id: serial("id").primaryKey(),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }).unique(),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" })
+    .unique(),
   enabled: boolean("enabled").default(true),
   goalReminders: boolean("goal_reminders").default(true),
   streakWarnings: boolean("streak_warnings").default(true),
@@ -269,12 +358,15 @@ export const notificationsRelations = relations(notifications, ({ one }) => ({
   }),
 }));
 
-export const notificationPreferencesRelations = relations(notificationPreferences, ({ one }) => ({
-  user: one(users, {
-    fields: [notificationPreferences.userId],
-    references: [users.id],
-  }),
-}));
+export const notificationPreferencesRelations = relations(
+  notificationPreferences,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [notificationPreferences.userId],
+      references: [users.id],
+    }),
+  })
+);
 
 export const journalEntriesRelations = relations(journalEntries, ({ one }) => ({
   user: one(users, {
@@ -313,33 +405,42 @@ export const achievementsRelations = relations(achievements, ({ many }) => ({
   userAchievements: many(userAchievements),
 }));
 
-export const userAchievementsRelations = relations(userAchievements, ({ one }) => ({
-  user: one(users, {
-    fields: [userAchievements.userId],
-    references: [users.id],
-  }),
-  achievement: one(achievements, {
-    fields: [userAchievements.achievementId],
-    references: [achievements.id],
-  }),
-}));
+export const userAchievementsRelations = relations(
+  userAchievements,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [userAchievements.userId],
+      references: [users.id],
+    }),
+    achievement: one(achievements, {
+      fields: [userAchievements.achievementId],
+      references: [achievements.id],
+    }),
+  })
+);
 
-export const weeklySummariesRelations = relations(weeklySummaries, ({ one }) => ({
-  user: one(users, {
-    fields: [weeklySummaries.userId],
-    references: [users.id],
-  }),
-}));
+export const weeklySummariesRelations = relations(
+  weeklySummaries,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [weeklySummaries.userId],
+      references: [users.id],
+    }),
+  })
+);
 
-export const visionBoardsRelations = relations(visionBoards, ({ one, many }) => ({
-  owner: one(users, {
-    fields: [visionBoards.ownerId],
-    references: [users.id],
-  }),
-  assets: many(assets),
-  goals: many(goals),
-  sharedLinks: many(sharedLinks),
-}));
+export const visionBoardsRelations = relations(
+  visionBoards,
+  ({ one, many }) => ({
+    owner: one(users, {
+      fields: [visionBoards.ownerId],
+      references: [users.id],
+    }),
+    assets: many(assets),
+    goals: many(goals),
+    sharedLinks: many(sharedLinks),
+  })
+);
 
 export const assetsRelations = relations(assets, ({ one }) => ({
   board: one(visionBoards, {
@@ -377,16 +478,19 @@ export const tasksRelations = relations(tasks, ({ one, many }) => ({
   calendarEntries: many(calendarEntries),
 }));
 
-export const calendarEntriesRelations = relations(calendarEntries, ({ one }) => ({
-  user: one(users, {
-    fields: [calendarEntries.userId],
-    references: [users.id],
-  }),
-  task: one(tasks, {
-    fields: [calendarEntries.taskId],
-    references: [tasks.id],
-  }),
-}));
+export const calendarEntriesRelations = relations(
+  calendarEntries,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [calendarEntries.userId],
+      references: [users.id],
+    }),
+    task: one(tasks, {
+      fields: [calendarEntries.taskId],
+      references: [tasks.id],
+    }),
+  })
+);
 
 export const sharedLinksRelations = relations(sharedLinks, ({ one }) => ({
   board: one(visionBoards, {
@@ -425,7 +529,9 @@ export const insertTaskSchema = createInsertSchema(tasks).omit({
   createdAt: true,
 });
 
-export const insertCalendarEntrySchema = createInsertSchema(calendarEntries).omit({
+export const insertCalendarEntrySchema = createInsertSchema(
+  calendarEntries
+).omit({
   id: true,
 });
 
@@ -434,7 +540,9 @@ export const insertSharedLinkSchema = createInsertSchema(sharedLinks).omit({
   createdAt: true,
 });
 
-export const insertWeeklySummarySchema = createInsertSchema(weeklySummaries).omit({
+export const insertWeeklySummarySchema = createInsertSchema(
+  weeklySummaries
+).omit({
   id: true,
   createdAt: true,
 });
@@ -457,22 +565,28 @@ export const insertAchievementSchema = createInsertSchema(achievements).omit({
   id: true,
 });
 
-export const insertUserAchievementSchema = createInsertSchema(userAchievements).omit({
+export const insertUserAchievementSchema = createInsertSchema(
+  userAchievements
+).omit({
   id: true,
   unlockedAt: true,
 });
 
-export const insertJournalEntrySchema = createInsertSchema(journalEntries).omit({
-  id: true,
-  createdAt: true,
-});
+export const insertJournalEntrySchema = createInsertSchema(journalEntries).omit(
+  {
+    id: true,
+    createdAt: true,
+  }
+);
 
 export const insertNotificationSchema = createInsertSchema(notifications).omit({
   id: true,
   createdAt: true,
 });
 
-export const insertNotificationPreferencesSchema = createInsertSchema(notificationPreferences).omit({
+export const insertNotificationPreferencesSchema = createInsertSchema(
+  notificationPreferences
+).omit({
   id: true,
   updatedAt: true,
 });
@@ -524,12 +638,21 @@ export type InsertJournalEntry = z.infer<typeof insertJournalEntrySchema>;
 export type Notification = typeof notifications.$inferSelect;
 export type InsertNotification = z.infer<typeof insertNotificationSchema>;
 
-export type NotificationPreferences = typeof notificationPreferences.$inferSelect;
-export type InsertNotificationPreferences = z.infer<typeof insertNotificationPreferencesSchema>;
+export type NotificationPreferences =
+  typeof notificationPreferences.$inferSelect;
+export type InsertNotificationPreferences = z.infer<
+  typeof insertNotificationPreferencesSchema
+>;
 
 // Achievement requirement type
 export interface AchievementRequirement {
-  type: "streak" | "tasks_completed" | "goals_completed" | "boards_created" | "login_days" | "xp_earned";
+  type:
+    | "streak"
+    | "tasks_completed"
+    | "goals_completed"
+    | "boards_created"
+    | "login_days"
+    | "xp_earned";
   count: number;
 }
 

@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { db } from "./db";
 import { setupAuth, isAuthenticated } from "./replitAuth";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { ObjectPermission } from "./objectAcl";
@@ -17,6 +18,8 @@ import { randomBytes } from "crypto";
 import OpenAI from "openai";
 import { seedGamification } from "./seedGamification";
 import { setupCollaboration } from "./collaboration";
+import { insertVisionObjectSchema, visionObjects } from "@shared/schema";
+import { eq, and } from "drizzle-orm";
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -28,10 +31,93 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
   await setupAuth(app);
-  
+
   await seedGamification();
-  
+
   setupCollaboration(httpServer);
+  // Vision Objects CRUD
+  app.get("/api/boards/:id/objects", isAuthenticated, async (req: any, res) => {
+    try {
+      const boardId = parseInt(req.params.id);
+      const userId = req.user.claims.sub;
+      const objects = await db
+        .select()
+        .from(visionObjects)
+        .where(
+          and(
+            eq(visionObjects.boardId, boardId),
+            eq(visionObjects.ownerId, userId)
+          )
+        );
+      res.json(objects);
+    } catch (error) {
+      console.error("Error fetching vision objects:", error);
+      res.status(500).json({ message: "Failed to fetch objects" });
+    }
+  });
+
+  app.post(
+    "/api/boards/:id/objects",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const boardId = parseInt(req.params.id);
+        const userId = req.user.claims.sub;
+        const payload = insertVisionObjectSchema.parse({
+          ...req.body,
+          boardId,
+          ownerId: userId,
+        });
+        const [obj] = await db
+          .insert(visionObjects)
+          .values(payload)
+          .returning();
+        res.status(201).json(obj);
+      } catch (error) {
+        console.error("Error creating vision object:", error);
+        if (error instanceof z.ZodError) {
+          return res
+            .status(400)
+            .json({ message: "Invalid data", errors: error.errors });
+        }
+        res.status(500).json({ message: "Failed to create object" });
+      }
+    }
+  );
+
+  app.patch("/api/objects/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const userId = req.user.claims.sub;
+      const [updated] = await db
+        .update(visionObjects)
+        .set({ ...req.body, updatedAt: new Date() })
+        .where(and(eq(visionObjects.id, id), eq(visionObjects.ownerId, userId)))
+        .returning();
+      if (!updated)
+        return res.status(404).json({ message: "Object not found" });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating vision object:", error);
+      res.status(500).json({ message: "Failed to update object" });
+    }
+  });
+
+  app.delete("/api/objects/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const userId = req.user.claims.sub;
+      await db
+        .delete(visionObjects)
+        .where(
+          and(eq(visionObjects.id, id), eq(visionObjects.ownerId, userId))
+        );
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting vision object:", error);
+      res.status(500).json({ message: "Failed to delete object" });
+    }
+  });
 
   // Auth routes
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
@@ -90,13 +176,18 @@ export async function registerRoutes(
   app.post("/api/boards", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const data = insertVisionBoardSchema.parse({ ...req.body, ownerId: userId });
+      const data = insertVisionBoardSchema.parse({
+        ...req.body,
+        ownerId: userId,
+      });
       const board = await storage.createBoard(data);
       res.status(201).json(board);
     } catch (error) {
       console.error("Error creating board:", error);
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: "Invalid data", errors: error.errors });
+        return res
+          .status(400)
+          .json({ message: "Invalid data", errors: error.errors });
       }
       res.status(500).json({ message: "Failed to create board" });
     }
@@ -169,7 +260,9 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error creating asset:", error);
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: "Invalid data", errors: error.errors });
+        return res
+          .status(400)
+          .json({ message: "Invalid data", errors: error.errors });
       }
       res.status(500).json({ message: "Failed to create asset" });
     }
@@ -239,7 +332,9 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error creating goal:", error);
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: "Invalid data", errors: error.errors });
+        return res
+          .status(400)
+          .json({ message: "Invalid data", errors: error.errors });
       }
       res.status(500).json({ message: "Failed to create goal" });
     }
@@ -308,7 +403,9 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error creating task:", error);
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: "Invalid data", errors: error.errors });
+        return res
+          .status(400)
+          .json({ message: "Invalid data", errors: error.errors });
       }
       res.status(500).json({ message: "Failed to create task" });
     }
@@ -356,8 +453,12 @@ export async function registerRoutes(
   app.get("/api/calendar-entries", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const month = req.query.month ? parseInt(req.query.month as string) : undefined;
-      const year = req.query.year ? parseInt(req.query.year as string) : undefined;
+      const month = req.query.month
+        ? parseInt(req.query.month as string)
+        : undefined;
+      const year = req.query.year
+        ? parseInt(req.query.year as string)
+        : undefined;
       const entries = await storage.getCalendarEntries(userId, month, year);
       res.json(entries);
     } catch (error) {
@@ -375,25 +476,31 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error creating calendar entry:", error);
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: "Invalid data", errors: error.errors });
+        return res
+          .status(400)
+          .json({ message: "Invalid data", errors: error.errors });
       }
       res.status(500).json({ message: "Failed to create calendar entry" });
     }
   });
 
-  app.patch("/api/calendar-entries/:id", isAuthenticated, async (req: any, res) => {
-    try {
-      const entryId = parseInt(req.params.id);
-      const updated = await storage.updateCalendarEntry(entryId, req.body);
-      if (!updated) {
-        return res.status(404).json({ message: "Entry not found" });
+  app.patch(
+    "/api/calendar-entries/:id",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const entryId = parseInt(req.params.id);
+        const updated = await storage.updateCalendarEntry(entryId, req.body);
+        if (!updated) {
+          return res.status(404).json({ message: "Entry not found" });
+        }
+        res.json(updated);
+      } catch (error) {
+        console.error("Error updating calendar entry:", error);
+        res.status(500).json({ message: "Failed to update calendar entry" });
       }
-      res.json(updated);
-    } catch (error) {
-      console.error("Error updating calendar entry:", error);
-      res.status(500).json({ message: "Failed to update calendar entry" });
     }
-  });
+  );
 
   // Toggle task completion
   app.post("/api/tasks/:id/toggle", isAuthenticated, async (req: any, res) => {
@@ -411,9 +518,10 @@ export async function registerRoutes(
       const updated = await storage.updateTask(taskId, {
         completed: newCompleted,
         lastDone: newCompleted ? new Date() : null,
-        streakCount: newCompleted && task.type === "habit"
-          ? (task.streakCount || 0) + 1
-          : task.streakCount,
+        streakCount:
+          newCompleted && task.type === "habit"
+            ? (task.streakCount || 0) + 1
+            : task.streakCount,
       });
       res.json(updated);
     } catch (error) {
@@ -423,24 +531,28 @@ export async function registerRoutes(
   });
 
   // Get tasks for a specific goal
-  app.get("/api/goals/:goalId/tasks", isAuthenticated, async (req: any, res) => {
-    try {
-      const goalId = parseInt(req.params.goalId);
-      const goal = await storage.getGoal(goalId);
-      if (!goal) {
-        return res.status(404).json({ message: "Goal not found" });
+  app.get(
+    "/api/goals/:goalId/tasks",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const goalId = parseInt(req.params.goalId);
+        const goal = await storage.getGoal(goalId);
+        if (!goal) {
+          return res.status(404).json({ message: "Goal not found" });
+        }
+        const userId = req.user.claims.sub;
+        if (goal.ownerId !== userId) {
+          return res.status(403).json({ message: "Forbidden" });
+        }
+        const tasks = await storage.getTasksByGoal(goalId);
+        res.json(tasks);
+      } catch (error) {
+        console.error("Error fetching goal tasks:", error);
+        res.status(500).json({ message: "Failed to fetch tasks" });
       }
-      const userId = req.user.claims.sub;
-      if (goal.ownerId !== userId) {
-        return res.status(403).json({ message: "Forbidden" });
-      }
-      const tasks = await storage.getTasksByGoal(goalId);
-      res.json(tasks);
-    } catch (error) {
-      console.error("Error fetching goal tasks:", error);
-      res.status(500).json({ message: "Failed to fetch tasks" });
     }
-  });
+  );
 
   // AI Goal Generation
   app.post("/api/ai/goals", isAuthenticated, async (req: any, res) => {
@@ -472,12 +584,12 @@ For each goal, provide:
 - milestones: Array of 3-5 milestone strings
 - dailyHabits: Array of 1-2 daily habits that support this goal
 
-Respond with valid JSON array only. No markdown, no explanation.`
+Respond with valid JSON array only. No markdown, no explanation.`,
           },
           {
             role: "user",
-            content: prompt
-          }
+            content: prompt,
+          },
         ],
         response_format: { type: "json_object" },
         max_tokens: 2000,
@@ -490,7 +602,7 @@ Respond with valid JSON array only. No markdown, no explanation.`
 
       const parsed = JSON.parse(content);
       const goals = parsed.goals || parsed;
-      
+
       res.json({ goals: Array.isArray(goals) ? goals : [goals] });
     } catch (error) {
       console.error("Error generating AI goals:", error);
@@ -502,7 +614,7 @@ Respond with valid JSON array only. No markdown, no explanation.`
   app.post("/api/ai/weekly-summary", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      
+
       // Gather user's progress data
       const [goals, tasks, calendarEntries] = await Promise.all([
         storage.getGoals(userId),
@@ -511,23 +623,25 @@ Respond with valid JSON array only. No markdown, no explanation.`
       ]);
 
       // Calculate metrics
-      const completedTasks = tasks.filter(t => t.completed).length;
+      const completedTasks = tasks.filter((t) => t.completed).length;
       const totalTasks = tasks.length;
-      const habits = tasks.filter(t => t.type === "habit");
-      const activeStreaks = habits.filter(h => (h.streakCount || 0) > 0);
-      const maxStreak = Math.max(...habits.map(h => h.streakCount || 0), 0);
-      const achievedGoals = goals.filter(g => g.status === "achieved").length;
-      const inProgressGoals = goals.filter(g => g.status === "in_progress").length;
+      const habits = tasks.filter((t) => t.type === "habit");
+      const activeStreaks = habits.filter((h) => (h.streakCount || 0) > 0);
+      const maxStreak = Math.max(...habits.map((h) => h.streakCount || 0), 0);
+      const achievedGoals = goals.filter((g) => g.status === "achieved").length;
+      const inProgressGoals = goals.filter(
+        (g) => g.status === "in_progress"
+      ).length;
 
       // Recent check-ins (last 7 days)
       const today = new Date();
       const weekAgo = new Date(today);
       weekAgo.setDate(weekAgo.getDate() - 7);
-      const recentEntries = calendarEntries.filter(e => {
+      const recentEntries = calendarEntries.filter((e) => {
         const entryDate = new Date(e.date);
         return entryDate >= weekAgo && entryDate <= today;
       });
-      const completedCheckIns = recentEntries.filter(e => e.done).length;
+      const completedCheckIns = recentEntries.filter((e) => e.done).length;
 
       // Build context for AI
       const progressContext = {
@@ -540,8 +654,8 @@ Respond with valid JSON array only. No markdown, no explanation.`
         activeStreaks: activeStreaks.length,
         maxStreak,
         weeklyCheckIns: completedCheckIns,
-        goalTitles: goals.map(g => g.title),
-        habitTitles: habits.map(h => h.title),
+        goalTitles: goals.map((g) => g.title),
+        habitTitles: habits.map((h) => h.title),
       };
 
       // Use Replit AI Integration credentials
@@ -566,12 +680,14 @@ Respond with valid JSON only:
   "focusAreas": ["Array of 1-2 areas that need attention"],
   "recommendations": ["Array of 2-3 specific, actionable suggestions for next week"],
   "motivationalMessage": "A brief encouraging message"
-}`
+}`,
           },
           {
             role: "user",
-            content: `Here is the user's progress data: ${JSON.stringify(progressContext)}`
-          }
+            content: `Here is the user's progress data: ${JSON.stringify(
+              progressContext
+            )}`,
+          },
         ],
         response_format: { type: "json_object" },
         max_tokens: 1000,
@@ -590,10 +706,19 @@ Respond with valid JSON only:
       const weekStartDate = weekStart.toISOString().split("T")[0];
 
       // Ensure arrays are properly formatted
-      const highlights = Array.isArray(parsed.highlights) ? parsed.highlights : [];
-      const focusAreas = Array.isArray(parsed.focusAreas) ? parsed.focusAreas : [];
-      const recommendations = Array.isArray(parsed.recommendations) ? parsed.recommendations : [];
-      const motivationalMessage = typeof parsed.motivationalMessage === "string" ? parsed.motivationalMessage : "";
+      const highlights = Array.isArray(parsed.highlights)
+        ? parsed.highlights
+        : [];
+      const focusAreas = Array.isArray(parsed.focusAreas)
+        ? parsed.focusAreas
+        : [];
+      const recommendations = Array.isArray(parsed.recommendations)
+        ? parsed.recommendations
+        : [];
+      const motivationalMessage =
+        typeof parsed.motivationalMessage === "string"
+          ? parsed.motivationalMessage
+          : "";
 
       // Save the summary with motivationalMessage
       const savedSummary = await storage.createWeeklySummary({
@@ -650,118 +775,151 @@ Respond with valid JSON only:
   });
 
   // Add XP to user
-  app.post("/api/gamification/xp/add", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const { amount, reason } = req.body;
-      if (!amount || typeof amount !== "number" || amount <= 0) {
-        return res.status(400).json({ message: "Valid positive amount is required" });
+  app.post(
+    "/api/gamification/xp/add",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.claims.sub;
+        const { amount, reason } = req.body;
+        if (!amount || typeof amount !== "number" || amount <= 0) {
+          return res
+            .status(400)
+            .json({ message: "Valid positive amount is required" });
+        }
+        const xp = await storage.addXp(userId, amount);
+        res.json({ ...xp, xpAdded: amount, reason });
+      } catch (error) {
+        console.error("Error adding XP:", error);
+        res.status(500).json({ message: "Failed to add XP" });
       }
-      const xp = await storage.addXp(userId, amount);
-      res.json({ ...xp, xpAdded: amount, reason });
-    } catch (error) {
-      console.error("Error adding XP:", error);
-      res.status(500).json({ message: "Failed to add XP" });
     }
-  });
+  );
 
   // Get leaderboard (authenticated to protect user data)
-  app.get("/api/gamification/leaderboard", isAuthenticated, async (req: any, res) => {
-    try {
-      const limit = parseInt(req.query.limit as string) || 10;
-      const leaderboard = await storage.getLeaderboard(Math.min(limit, 50));
-      res.json(leaderboard);
-    } catch (error) {
-      console.error("Error fetching leaderboard:", error);
-      res.status(500).json({ message: "Failed to fetch leaderboard" });
+  app.get(
+    "/api/gamification/leaderboard",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const limit = parseInt(req.query.limit as string) || 10;
+        const leaderboard = await storage.getLeaderboard(Math.min(limit, 50));
+        res.json(leaderboard);
+      } catch (error) {
+        console.error("Error fetching leaderboard:", error);
+        res.status(500).json({ message: "Failed to fetch leaderboard" });
+      }
     }
-  });
+  );
 
   // Get all badges (authenticated)
-  app.get("/api/gamification/badges", isAuthenticated, async (req: any, res) => {
-    try {
-      const allBadges = await storage.getBadges();
-      res.json(allBadges);
-    } catch (error) {
-      console.error("Error fetching badges:", error);
-      res.status(500).json({ message: "Failed to fetch badges" });
+  app.get(
+    "/api/gamification/badges",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const allBadges = await storage.getBadges();
+        res.json(allBadges);
+      } catch (error) {
+        console.error("Error fetching badges:", error);
+        res.status(500).json({ message: "Failed to fetch badges" });
+      }
     }
-  });
+  );
 
   // Get user's earned badges
-  app.get("/api/gamification/badges/user", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const badges = await storage.getUserBadges(userId);
-      res.json(badges);
-    } catch (error) {
-      console.error("Error fetching user badges:", error);
-      res.status(500).json({ message: "Failed to fetch user badges" });
+  app.get(
+    "/api/gamification/badges/user",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.claims.sub;
+        const badges = await storage.getUserBadges(userId);
+        res.json(badges);
+      } catch (error) {
+        console.error("Error fetching user badges:", error);
+        res.status(500).json({ message: "Failed to fetch user badges" });
+      }
     }
-  });
+  );
 
   // Get all achievements (authenticated)
-  app.get("/api/gamification/achievements", isAuthenticated, async (req: any, res) => {
-    try {
-      const allAchievements = await storage.getAchievements();
-      res.json(allAchievements);
-    } catch (error) {
-      console.error("Error fetching achievements:", error);
-      res.status(500).json({ message: "Failed to fetch achievements" });
+  app.get(
+    "/api/gamification/achievements",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const allAchievements = await storage.getAchievements();
+        res.json(allAchievements);
+      } catch (error) {
+        console.error("Error fetching achievements:", error);
+        res.status(500).json({ message: "Failed to fetch achievements" });
+      }
     }
-  });
+  );
 
   // Get user's achievements with progress
-  app.get("/api/gamification/achievements/user", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const achievements = await storage.getUserAchievements(userId);
-      res.json(achievements);
-    } catch (error) {
-      console.error("Error fetching user achievements:", error);
-      res.status(500).json({ message: "Failed to fetch user achievements" });
+  app.get(
+    "/api/gamification/achievements/user",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.claims.sub;
+        const achievements = await storage.getUserAchievements(userId);
+        res.json(achievements);
+      } catch (error) {
+        console.error("Error fetching user achievements:", error);
+        res.status(500).json({ message: "Failed to fetch user achievements" });
+      }
     }
-  });
+  );
 
   // Get complete gamification profile
-  app.get("/api/gamification/profile", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      
-      let xp = await storage.getUserXp(userId);
-      if (!xp) {
-        xp = await storage.upsertUserXp({
-          userId,
-          totalXp: 0,
-          level: 1,
-          currentLevelXp: 0,
-          xpToNextLevel: 100,
+  app.get(
+    "/api/gamification/profile",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.claims.sub;
+
+        let xp = await storage.getUserXp(userId);
+        if (!xp) {
+          xp = await storage.upsertUserXp({
+            userId,
+            totalXp: 0,
+            level: 1,
+            currentLevelXp: 0,
+            xpToNextLevel: 100,
+          });
+        }
+
+        const badges = await storage.getUserBadges(userId);
+        const achievements = await storage.getUserAchievements(userId);
+        const allBadges = await storage.getBadges();
+        const allAchievements = await storage.getAchievements();
+
+        res.json({
+          xp,
+          badges,
+          achievements,
+          allBadges,
+          allAchievements,
+          stats: {
+            totalBadges: allBadges.length,
+            earnedBadges: badges.length,
+            totalAchievements: allAchievements.length,
+            unlockedAchievements: achievements.filter((a) => a.progress === 100)
+              .length,
+          },
         });
+      } catch (error) {
+        console.error("Error fetching gamification profile:", error);
+        res
+          .status(500)
+          .json({ message: "Failed to fetch gamification profile" });
       }
-      
-      const badges = await storage.getUserBadges(userId);
-      const achievements = await storage.getUserAchievements(userId);
-      const allBadges = await storage.getBadges();
-      const allAchievements = await storage.getAchievements();
-      
-      res.json({
-        xp,
-        badges,
-        achievements,
-        allBadges,
-        allAchievements,
-        stats: {
-          totalBadges: allBadges.length,
-          earnedBadges: badges.length,
-          totalAchievements: allAchievements.length,
-          unlockedAchievements: achievements.filter(a => a.progress === 100).length,
-        },
-      });
-    } catch (error) {
-      console.error("Error fetching gamification profile:", error);
-      res.status(500).json({ message: "Failed to fetch gamification profile" });
     }
-  });
+  );
 
   // ==================== END GAMIFICATION ROUTES ====================
 
@@ -785,7 +943,9 @@ Respond with valid JSON only:
     const userId = req.user?.claims?.sub;
     const objectStorageService = new ObjectStorageService();
     try {
-      const objectFile = await objectStorageService.getObjectEntityFile(req.path);
+      const objectFile = await objectStorageService.getObjectEntityFile(
+        req.path
+      );
       const canAccess = await objectStorageService.canAccessObjectEntity({
         objectFile,
         userId: userId,
@@ -817,7 +977,9 @@ Respond with valid JSON only:
 
   app.put("/api/assets/upload", isAuthenticated, async (req: any, res) => {
     if (!req.body.assetURL || !req.body.boardId) {
-      return res.status(400).json({ error: "assetURL and boardId are required" });
+      return res
+        .status(400)
+        .json({ error: "assetURL and boardId are required" });
     }
 
     const userId = req.user?.claims?.sub;
@@ -829,7 +991,9 @@ Respond with valid JSON only:
       return res.status(404).json({ error: "Board not found" });
     }
     if (board.ownerId !== userId) {
-      return res.status(403).json({ error: "Forbidden - you don't own this board" });
+      return res
+        .status(403)
+        .json({ error: "Forbidden - you don't own this board" });
     }
 
     try {
@@ -860,7 +1024,7 @@ Respond with valid JSON only:
   });
 
   // ==================== JOURNAL ROUTES ====================
-  
+
   // Get user's journal entries
   app.get("/api/journal", isAuthenticated, async (req: any, res) => {
     try {
@@ -900,12 +1064,18 @@ Respond with valid JSON only:
       const { title, transcript, audioUrl, duration, goalId, tags } = req.body;
 
       // Validate that at least transcript is provided
-      if (!transcript || typeof transcript !== "string" || transcript.trim().length === 0) {
+      if (
+        !transcript ||
+        typeof transcript !== "string" ||
+        transcript.trim().length === 0
+      ) {
         return res.status(400).json({ message: "Transcript is required" });
       }
 
       // Validate tags if provided
-      const validatedTags = Array.isArray(tags) ? tags.filter((t: unknown) => typeof t === "string") : null;
+      const validatedTags = Array.isArray(tags)
+        ? tags.filter((t: unknown) => typeof t === "string")
+        : null;
 
       // Analyze sentiment if transcript is provided
       let mood: string | undefined;
@@ -923,18 +1093,19 @@ Respond with valid JSON only:
   "mood": "<one of: happy, excited, grateful, calm, neutral, anxious, sad, frustrated, reflective>",
   "sentiment": "<number between -1.0 and 1.0 representing negative to positive>"
 }
-Be accurate and empathetic in your analysis. Only return the JSON, nothing else.`
+Be accurate and empathetic in your analysis. Only return the JSON, nothing else.`,
               },
               {
                 role: "user",
-                content: transcript
-              }
+                content: transcript,
+              },
             ],
             temperature: 0.3,
             max_tokens: 100,
           });
-          
-          const analysisText = analysisResponse.choices[0]?.message?.content || "";
+
+          const analysisText =
+            analysisResponse.choices[0]?.message?.content || "";
           try {
             const analysis = JSON.parse(analysisText.trim());
             mood = analysis.mood;
@@ -969,25 +1140,29 @@ Be accurate and empathetic in your analysis. Only return the JSON, nothing else.
   });
 
   // Transcribe audio (speech-to-text using OpenAI Whisper)
-  app.post("/api/journal/transcribe", isAuthenticated, async (req: any, res) => {
-    try {
-      const { audioUrl } = req.body;
-      
-      if (!audioUrl) {
-        return res.status(400).json({ message: "Audio URL is required" });
-      }
+  app.post(
+    "/api/journal/transcribe",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const { audioUrl } = req.body;
 
-      // For now, return a placeholder - real implementation would fetch audio and send to Whisper
-      // The frontend will use browser's Web Speech API for real-time transcription
-      res.json({ 
-        transcript: "", 
-        message: "Use browser's Web Speech API for real-time transcription" 
-      });
-    } catch (error) {
-      console.error("Error transcribing audio:", error);
-      res.status(500).json({ message: "Failed to transcribe audio" });
+        if (!audioUrl) {
+          return res.status(400).json({ message: "Audio URL is required" });
+        }
+
+        // For now, return a placeholder - real implementation would fetch audio and send to Whisper
+        // The frontend will use browser's Web Speech API for real-time transcription
+        res.json({
+          transcript: "",
+          message: "Use browser's Web Speech API for real-time transcription",
+        });
+      } catch (error) {
+        console.error("Error transcribing audio:", error);
+        res.status(500).json({ message: "Failed to transcribe audio" });
+      }
     }
-  });
+  );
 
   // Update journal entry
   app.patch("/api/journal/:id", isAuthenticated, async (req: any, res) => {
@@ -1001,7 +1176,7 @@ Be accurate and empathetic in your analysis. Only return the JSON, nothing else.
       if (entry.userId !== userId) {
         return res.status(403).json({ message: "Forbidden" });
       }
-      
+
       const { title, transcript, tags, goalId, isPrivate } = req.body;
       const updated = await storage.updateJournalEntry(id, {
         title: title !== undefined ? title : entry.title,
@@ -1010,7 +1185,7 @@ Be accurate and empathetic in your analysis. Only return the JSON, nothing else.
         goalId: goalId !== undefined ? goalId : entry.goalId,
         isPrivate: isPrivate !== undefined ? isPrivate : entry.isPrivate,
       });
-      
+
       res.json(updated);
     } catch (error) {
       console.error("Error updating journal entry:", error);
@@ -1030,7 +1205,7 @@ Be accurate and empathetic in your analysis. Only return the JSON, nothing else.
       if (entry.userId !== userId) {
         return res.status(403).json({ message: "Forbidden" });
       }
-      
+
       await storage.deleteJournalEntry(id);
       res.status(204).send();
     } catch (error) {
@@ -1043,9 +1218,11 @@ Be accurate and empathetic in your analysis. Only return the JSON, nothing else.
   app.post("/api/journal/analyze", isAuthenticated, async (req: any, res) => {
     try {
       const { text } = req.body;
-      
+
       if (!text || text.trim().length < 10) {
-        return res.status(400).json({ message: "Text must be at least 10 characters" });
+        return res
+          .status(400)
+          .json({ message: "Text must be at least 10 characters" });
       }
 
       const analysisResponse = await openai.chat.completions.create({
@@ -1059,12 +1236,12 @@ Be accurate and empathetic in your analysis. Only return the JSON, nothing else.
   "sentiment": <number between -1.0 and 1.0>,
   "insights": "<brief 1-2 sentence observation about the emotional state>"
 }
-Only return the JSON, nothing else.`
+Only return the JSON, nothing else.`,
           },
           {
             role: "user",
-            content: text
-          }
+            content: text,
+          },
         ],
         temperature: 0.3,
         max_tokens: 200,
@@ -1094,12 +1271,15 @@ Only return the JSON, nothing else.`
       const userId = req.user.claims.sub;
       const unreadOnly = req.query.unreadOnly === "true";
       const limit = parseInt(req.query.limit as string) || 50;
-      
-      const notificationList = await storage.getNotifications(userId, { unreadOnly, limit });
+
+      const notificationList = await storage.getNotifications(userId, {
+        unreadOnly,
+        limit,
+      });
       const unreadCount = await storage.getUnreadNotificationCount(userId);
-      
+
       await storage.updateEngagement(userId, 1);
-      
+
       res.json({ notifications: notificationList, unreadCount });
     } catch (error) {
       console.error("Error fetching notifications:", error);
@@ -1108,198 +1288,235 @@ Only return the JSON, nothing else.`
   });
 
   // Get unread count only
-  app.get("/api/notifications/count", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const count = await storage.getUnreadNotificationCount(userId);
-      res.json({ count });
-    } catch (error) {
-      console.error("Error fetching notification count:", error);
-      res.status(500).json({ message: "Failed to fetch count" });
+  app.get(
+    "/api/notifications/count",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.claims.sub;
+        const count = await storage.getUnreadNotificationCount(userId);
+        res.json({ count });
+      } catch (error) {
+        console.error("Error fetching notification count:", error);
+        res.status(500).json({ message: "Failed to fetch count" });
+      }
     }
-  });
+  );
 
   // Mark notification as read
-  app.patch("/api/notifications/:id/read", isAuthenticated, async (req: any, res) => {
-    try {
-      const notificationId = parseInt(req.params.id);
-      const userId = req.user.claims.sub;
-      
-      const notification = await storage.getNotification(notificationId);
-      if (!notification) {
-        return res.status(404).json({ message: "Notification not found" });
+  app.patch(
+    "/api/notifications/:id/read",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const notificationId = parseInt(req.params.id);
+        const userId = req.user.claims.sub;
+
+        const notification = await storage.getNotification(notificationId);
+        if (!notification) {
+          return res.status(404).json({ message: "Notification not found" });
+        }
+        if (notification.userId !== userId) {
+          return res.status(403).json({ message: "Forbidden" });
+        }
+
+        const updated = await storage.markNotificationRead(notificationId);
+        await storage.updateEngagement(userId, 2);
+
+        res.json(updated);
+      } catch (error) {
+        console.error("Error marking notification read:", error);
+        res.status(500).json({ message: "Failed to mark read" });
       }
-      if (notification.userId !== userId) {
-        return res.status(403).json({ message: "Forbidden" });
-      }
-      
-      const updated = await storage.markNotificationRead(notificationId);
-      await storage.updateEngagement(userId, 2);
-      
-      res.json(updated);
-    } catch (error) {
-      console.error("Error marking notification read:", error);
-      res.status(500).json({ message: "Failed to mark read" });
     }
-  });
+  );
 
   // Mark all notifications as read
-  app.post("/api/notifications/read-all", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      await storage.markAllNotificationsRead(userId);
-      await storage.updateEngagement(userId, 5);
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error marking all read:", error);
-      res.status(500).json({ message: "Failed to mark all read" });
+  app.post(
+    "/api/notifications/read-all",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.claims.sub;
+        await storage.markAllNotificationsRead(userId);
+        await storage.updateEngagement(userId, 5);
+        res.json({ success: true });
+      } catch (error) {
+        console.error("Error marking all read:", error);
+        res.status(500).json({ message: "Failed to mark all read" });
+      }
     }
-  });
+  );
 
   // Dismiss notification
-  app.delete("/api/notifications/:id", isAuthenticated, async (req: any, res) => {
-    try {
-      const notificationId = parseInt(req.params.id);
-      const userId = req.user.claims.sub;
-      
-      const notification = await storage.getNotification(notificationId);
-      if (!notification) {
-        return res.status(404).json({ message: "Notification not found" });
+  app.delete(
+    "/api/notifications/:id",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const notificationId = parseInt(req.params.id);
+        const userId = req.user.claims.sub;
+
+        const notification = await storage.getNotification(notificationId);
+        if (!notification) {
+          return res.status(404).json({ message: "Notification not found" });
+        }
+        if (notification.userId !== userId) {
+          return res.status(403).json({ message: "Forbidden" });
+        }
+
+        await storage.dismissNotification(notificationId);
+        res.json({ success: true });
+      } catch (error) {
+        console.error("Error dismissing notification:", error);
+        res.status(500).json({ message: "Failed to dismiss" });
       }
-      if (notification.userId !== userId) {
-        return res.status(403).json({ message: "Forbidden" });
-      }
-      
-      await storage.dismissNotification(notificationId);
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error dismissing notification:", error);
-      res.status(500).json({ message: "Failed to dismiss" });
     }
-  });
+  );
 
   // Get notification preferences
-  app.get("/api/notifications/preferences", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      let prefs = await storage.getNotificationPreferences(userId);
-      
-      if (!prefs) {
-        prefs = await storage.upsertNotificationPreferences({ userId });
+  app.get(
+    "/api/notifications/preferences",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.claims.sub;
+        let prefs = await storage.getNotificationPreferences(userId);
+
+        if (!prefs) {
+          prefs = await storage.upsertNotificationPreferences({ userId });
+        }
+
+        res.json(prefs);
+      } catch (error) {
+        console.error("Error fetching preferences:", error);
+        res.status(500).json({ message: "Failed to fetch preferences" });
       }
-      
-      res.json(prefs);
-    } catch (error) {
-      console.error("Error fetching preferences:", error);
-      res.status(500).json({ message: "Failed to fetch preferences" });
     }
-  });
+  );
 
   // Update notification preferences
-  app.patch("/api/notifications/preferences", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const updates = req.body;
-      
-      const prefs = await storage.upsertNotificationPreferences({
-        userId,
-        ...updates,
-      });
-      
-      res.json(prefs);
-    } catch (error) {
-      console.error("Error updating preferences:", error);
-      res.status(500).json({ message: "Failed to update preferences" });
+  app.patch(
+    "/api/notifications/preferences",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.claims.sub;
+        const updates = req.body;
+
+        const prefs = await storage.upsertNotificationPreferences({
+          userId,
+          ...updates,
+        });
+
+        res.json(prefs);
+      } catch (error) {
+        console.error("Error updating preferences:", error);
+        res.status(500).json({ message: "Failed to update preferences" });
+      }
     }
-  });
+  );
 
   // Generate contextual notifications based on user activity
-  app.post("/api/notifications/generate", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const prefs = await storage.getNotificationPreferences(userId);
-      
-      if (!prefs?.enabled) {
-        return res.json({ generated: 0 });
-      }
-      
-      const notificationsToCreate: any[] = [];
-      
-      if (prefs.streakWarnings) {
-        const tasks = await storage.getTasks(userId);
-        const habitsAtRisk = tasks.filter(t => 
-          t.type === "habit" && 
-          t.streakCount && 
-          t.streakCount > 0 &&
-          t.lastDone && 
-          Date.now() - new Date(t.lastDone).getTime() > 20 * 60 * 60 * 1000
-        );
-        
-        for (const habit of habitsAtRisk.slice(0, 3)) {
-          notificationsToCreate.push({
-            userId,
-            type: "streak_warning",
-            title: "Streak at Risk!",
-            message: `Your ${habit.streakCount}-day streak for "${habit.title}" is about to break. Complete it before midnight!`,
-            actionUrl: `/calendar`,
-            priority: "high",
-            metadata: { taskId: habit.id, streakCount: habit.streakCount },
-          });
+  app.post(
+    "/api/notifications/generate",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.claims.sub;
+        const prefs = await storage.getNotificationPreferences(userId);
+
+        if (!prefs?.enabled) {
+          return res.json({ generated: 0 });
         }
-      }
-      
-      if (prefs.goalReminders) {
-        const goals = await storage.getGoals(userId);
-        const upcomingGoals = goals.filter(g => {
-          if (!g.targetDate) return false;
-          const daysUntil = (new Date(g.targetDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24);
-          return daysUntil > 0 && daysUntil < 7 && parseFloat(g.progress?.toString() || "0") < 80;
-        });
-        
-        for (const goal of upcomingGoals.slice(0, 2)) {
-          notificationsToCreate.push({
-            userId,
-            type: "goal_reminder",
-            title: "Goal Deadline Approaching",
-            message: `"${goal.title}" is due soon with ${goal.progress}% complete. Need to pick up the pace?`,
-            actionUrl: `/goals`,
-            priority: "normal",
-            metadata: { goalId: goal.id },
-          });
+
+        const notificationsToCreate: any[] = [];
+
+        if (prefs.streakWarnings) {
+          const tasks = await storage.getTasks(userId);
+          const habitsAtRisk = tasks.filter(
+            (t) =>
+              t.type === "habit" &&
+              t.streakCount &&
+              t.streakCount > 0 &&
+              t.lastDone &&
+              Date.now() - new Date(t.lastDone).getTime() > 20 * 60 * 60 * 1000
+          );
+
+          for (const habit of habitsAtRisk.slice(0, 3)) {
+            notificationsToCreate.push({
+              userId,
+              type: "streak_warning",
+              title: "Streak at Risk!",
+              message: `Your ${habit.streakCount}-day streak for "${habit.title}" is about to break. Complete it before midnight!`,
+              actionUrl: `/calendar`,
+              priority: "high",
+              metadata: { taskId: habit.id, streakCount: habit.streakCount },
+            });
+          }
         }
-      }
-      
-      if (prefs.habitPrompts) {
-        const tasks = await storage.getTasks(userId);
-        const incompleteTodayHabits = tasks.filter(t => {
-          if (t.type !== "habit") return false;
-          if (!t.lastDone) return true;
-          const lastDoneDate = new Date(t.lastDone).toDateString();
-          return lastDoneDate !== new Date().toDateString();
-        });
-        
-        if (incompleteTodayHabits.length > 0) {
-          notificationsToCreate.push({
-            userId,
-            type: "habit_prompt",
-            title: "Daily Habits Waiting",
-            message: `You have ${incompleteTodayHabits.length} habit${incompleteTodayHabits.length > 1 ? "s" : ""} to complete today. Keep building those streaks!`,
-            actionUrl: `/calendar`,
-            priority: "normal",
+
+        if (prefs.goalReminders) {
+          const goals = await storage.getGoals(userId);
+          const upcomingGoals = goals.filter((g) => {
+            if (!g.targetDate) return false;
+            const daysUntil =
+              (new Date(g.targetDate).getTime() - Date.now()) /
+              (1000 * 60 * 60 * 24);
+            return (
+              daysUntil > 0 &&
+              daysUntil < 7 &&
+              parseFloat(g.progress?.toString() || "0") < 80
+            );
           });
+
+          for (const goal of upcomingGoals.slice(0, 2)) {
+            notificationsToCreate.push({
+              userId,
+              type: "goal_reminder",
+              title: "Goal Deadline Approaching",
+              message: `"${goal.title}" is due soon with ${goal.progress}% complete. Need to pick up the pace?`,
+              actionUrl: `/goals`,
+              priority: "normal",
+              metadata: { goalId: goal.id },
+            });
+          }
         }
+
+        if (prefs.habitPrompts) {
+          const tasks = await storage.getTasks(userId);
+          const incompleteTodayHabits = tasks.filter((t) => {
+            if (t.type !== "habit") return false;
+            if (!t.lastDone) return true;
+            const lastDoneDate = new Date(t.lastDone).toDateString();
+            return lastDoneDate !== new Date().toDateString();
+          });
+
+          if (incompleteTodayHabits.length > 0) {
+            notificationsToCreate.push({
+              userId,
+              type: "habit_prompt",
+              title: "Daily Habits Waiting",
+              message: `You have ${incompleteTodayHabits.length} habit${
+                incompleteTodayHabits.length > 1 ? "s" : ""
+              } to complete today. Keep building those streaks!`,
+              actionUrl: `/calendar`,
+              priority: "normal",
+            });
+          }
+        }
+
+        for (const notif of notificationsToCreate) {
+          await storage.createNotification(notif);
+        }
+
+        res.json({ generated: notificationsToCreate.length });
+      } catch (error) {
+        console.error("Error generating notifications:", error);
+        res.status(500).json({ message: "Failed to generate notifications" });
       }
-      
-      for (const notif of notificationsToCreate) {
-        await storage.createNotification(notif);
-      }
-      
-      res.json({ generated: notificationsToCreate.length });
-    } catch (error) {
-      console.error("Error generating notifications:", error);
-      res.status(500).json({ message: "Failed to generate notifications" });
     }
-  });
+  );
 
   // ==================== END NOTIFICATION ROUTES ====================
 
@@ -1316,7 +1533,9 @@ Only return the JSON, nothing else.`
         return res.status(403).json({ message: "Forbidden" });
       }
       const token = randomBytes(32).toString("hex");
-      const expiresAt = req.body.expiresAt ? new Date(req.body.expiresAt) : null;
+      const expiresAt = req.body.expiresAt
+        ? new Date(req.body.expiresAt)
+        : null;
       const link = await storage.createSharedLink({
         boardId,
         token,

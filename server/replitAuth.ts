@@ -67,7 +67,10 @@ export async function setupAuth(app: Express) {
   app.use(passport.session());
 
   // Development auth bypass: allows local runs without OIDC client setup
-  if (process.env.NODE_ENV !== "production" && process.env.DEV_AUTH_BYPASS === "true") {
+  if (
+    process.env.NODE_ENV !== "production" &&
+    process.env.DEV_AUTH_BYPASS === "true"
+  ) {
     // Seed a fake user into the session if not present
     app.use((req, _res, next) => {
       if (!req.user) {
@@ -169,7 +172,10 @@ export async function setupAuth(app: Express) {
 
 export const isAuthenticated: RequestHandler = async (req, res, next) => {
   // Bypass in development when enabled
-  if (process.env.NODE_ENV !== "production" && process.env.DEV_AUTH_BYPASS === "true") {
+  if (
+    process.env.NODE_ENV !== "production" &&
+    process.env.DEV_AUTH_BYPASS === "true"
+  ) {
     return next();
   }
   const user = req.user as any;

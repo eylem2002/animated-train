@@ -7,19 +7,24 @@ import {
   Target,
   Trash2,
   Sticker,
+  Pin,
+  StickyNote,
 } from "lucide-react";
 
 export function VisionToolbar({
   onAction,
+  activeTool,
 }: {
   onAction?: (action: string) => void;
+  activeTool?: string | null;
 }) {
   const tools = [
     { key: "image", icon: <ImageIcon className="w-4 h-4" />, label: "Image" },
-    { key: "draw", icon: <Pencil className="w-4 h-4" />, label: "Draw" },
+    { key: "draw", icon: <Pencil className="w-4 h-4" />, label: "Draw on Wall" },
+    { key: "note", icon: <StickyNote className="w-4 h-4" />, label: "Sticky Note" },
+    { key: "pin", icon: <Pin className="w-4 h-4" />, label: "Pin" },
     { key: "text", icon: <Type className="w-4 h-4" />, label: "Text" },
     { key: "link", icon: <LinkIcon className="w-4 h-4" />, label: "Link" },
-    { key: "sticker", icon: <Sticker className="w-4 h-4" />, label: "Sticker" },
     { key: "goal", icon: <Target className="w-4 h-4" />, label: "Goal" },
     { key: "delete", icon: <Trash2 className="w-4 h-4" />, label: "Delete" },
   ];
@@ -29,7 +34,7 @@ export function VisionToolbar({
       {tools.map((t) => (
         <Button
           key={t.key}
-          variant="ghost"
+          variant={activeTool === t.key ? "default" : "ghost"}
           size="icon"
           title={t.label}
           onClick={() => onAction && onAction(t.key)}
